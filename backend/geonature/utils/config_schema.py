@@ -137,6 +137,10 @@ class UpdaterConfig(Schema):
     STATE_DIR = fields.String(load_default="/var/lib/geonature/update")
     LOG_DIR = fields.String(load_default="/var/log/geonature/update")
     SERVICE_NAME = fields.String(load_default="geonature-update.service")
+    # Région Taxref utilisée lors de la migration (colonne de statut : fr, gf, mar, gua…)
+    TAXREF_REGION = fields.String(
+        load_default="fr", validate=Regexp(r"^[a-z]{2,5}$", error="Région Taxref invalide")
+    )
 
 
 class AdditionalFields(Schema):

@@ -336,7 +336,8 @@ La page « Admin > Autres > Mises à jour » permet de lancer en un clic :
   (``geonature db autoupgrade`` et ``geonature upgrade-modules-db``) ;
 * la régénération de la configuration et le rebuild du frontend (``geonature update-configuration``) ;
 * des traitements sur les référentiels : cache des règles de sensibilité, sensibilité de la synthèse,
-  profils de taxons.
+  profils de taxons ;
+* la migration vers la version suivante de Taxref, en deux étapes (analyse, puis application).
 
 La page affiche le journal de l'opération en direct. Les journaux sont conservés dans
 ``/var/log/geonature/update/`` et l'état de la dernière opération dans ``/var/lib/geonature/update/status.json``.
@@ -354,6 +355,7 @@ jour lui-même, car il est arrêté pendant celle-ci. Le script peut aussi être
     ./install/update/geonature-update.sh db
     ./install/update/geonature-update.sh frontend
     ./install/update/geonature-update.sh ref sensitivity-cache
+    ./install/update/geonature-update.sh taxref analyse:18      # puis : taxref apply:18
 
 **Activation.**
 
@@ -395,6 +397,22 @@ que le bouton ne fait pas à votre place.
 GitHub dans ses métadonnées. Les modules fournis avec GeoNature (dossier ``contrib/``) se mettent à jour avec
 GeoNature. Un clone git qui contient des modifications locales non commitées est refusé.
 
-**Limites.** La migration vers une nouvelle version de Taxref n'est pas proposée, car elle demande une analyse
-manuelle des conflits : suivez la documentation de TaxHub. Si vous changez ``UPDATER.STATE_DIR``, adaptez aussi
-``EnvironmentFile`` dans ``/etc/systemd/system/geonature-update.service``.
+**Migration de Taxref.** La carte « Taxref » affiche la version installée. Elle propose la migration vers la
+version suivante quand la version de TaxHub installée la connaît. Les migrations se font une version après
+l'autre. La migration se fait en deux étapes, avec les commandes de TaxHub :
+
+1. **Analyser** (``geonature taxref migrate-to-vNN import-taxref-vNN``) : la nouvelle version est importée dans
+   des tables temporaires, sans toucher au Taxref en service. La page affiche le résultat et propose les
+   rapports CSV en téléchargement : ``liste_changements.csv``, ``liste_split.csv``, cd_nom disparus encore
+   utilisés… S'il y a des conflits bloquants, corrigez vos données puis relancez l'analyse. Si le blocage vient
+   de cd_nom disparus, vous pouvez aussi cocher « conserver les cd_nom disparus ».
+2. **Appliquer** (``geonature taxref migrate-to-vNN apply-changes --keep-oldtaxref --keep-oldbdc``) : ce bouton
+   n'est disponible qu'après une analyse sans conflit bloquant, avec la même option. GeoNature est arrêté, la
+   base est toujours sauvegardée avant, et les anciennes tables Taxref et statuts sont conservées en copie. La
+   région utilisée est ``UPDATER.TAXREF_REGION`` (``fr`` par défaut).
+
+Après la migration, installez le référentiel de sensibilité de la nouvelle version de Taxref (voir
+:doc:`sensitivity`), puis lancez « Sensibilité : rafraîchir le cache des règles ».
+
+**Limites.** Si vous changez ``UPDATER.STATE_DIR``, adaptez aussi ``EnvironmentFile`` dans
+``/etc/systemd/system/geonature-update.service``.

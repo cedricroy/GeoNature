@@ -615,6 +615,8 @@ MEDIA_CLEAN_CRONTAB = "0 1 * * *"
     STATE_DIR = "/var/lib/geonature/update"
     LOG_DIR = "/var/log/geonature/update"
     SERVICE_NAME = "geonature-update.service"
+    # Région Taxref utilisée lors de la migration de Taxref (fr, gf, mar, gua, …)
+    TAXREF_REGION = "fr"
 
 
 # Champs additionnels

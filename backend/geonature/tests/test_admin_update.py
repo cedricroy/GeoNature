@@ -204,3 +204,53 @@ class TestUpdateUtils:
         status = utils.read_status()
         assert status["state"] == "failed"
         assert "sudo: a password is required" in status["message"]
+
+
+class TestTaxrefUpdate:
+    @pytest.fixture
+    def next_v18(self, monkeypatch):
+        monkeypatch.setattr(utils, "taxref_next_version", lambda current=None: 18)
+
+    def _marker(self, ok, keep):
+        directory = utils.state_dir() / "taxref"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "analysis-v18.json").write_text(
+            json.dumps({"ok": ok, "keep_cdnom": keep, "date": "x"})
+        )
+
+    def test_validate(self, app, updater, next_v18):
+        env = utils.validate_request("taxref", "analyse:18")
+        assert env["TAXREF_STEP"] == "analyse"
+        assert env["TAXREF_REGION"] == "fr"
+        # Saut de version, ou application sans analyse : refusé
+        for bad in ["analyse:19", "apply:18", "apply:18;rm", "drop:18"]:
+            with pytest.raises(utils.UpdateRequestError):
+                utils.validate_request("taxref", bad)
+        self._marker(ok=False, keep=False)
+        with pytest.raises(utils.UpdateRequestError):
+            utils.validate_request("taxref", "apply:18")
+        self._marker(ok=True, keep=True)
+        with pytest.raises(utils.UpdateRequestError):
+            utils.validate_request("taxref", "apply:18")  # option différente de l'analyse
+        assert utils.validate_request("taxref", "apply:18:keep")["TAXREF_KEEP_CDNOM"] == "1"
+
+    def test_taxref_info(self, app):
+        info = utils.taxref_info()
+        assert info is not None
+        assert info["taxref_count"] >= 0
+
+    @pytest.mark.usefixtures("client_class", "temporary_transaction")
+    def test_report_download(self, users, updater, next_v18):
+        set_logged_user(self.client, users["admin_user"])
+        report_dir = utils.taxref_work_dir(18) / "tmp"
+        report_dir.mkdir(parents=True)
+        (report_dir / "liste_split.csv").write_text("a,b\n")
+        response = self.client.get(
+            url_for("update.taxref_report", version=18, filename="liste_split.csv")
+        )
+        assert response.status_code == 200
+        assert response.data == b"a,b\n"
+        response = self.client.get(
+            url_for("update.taxref_report", version=18, filename="status.json")
+        )
+        assert response.status_code == 404

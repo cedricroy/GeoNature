@@ -11,6 +11,9 @@
 #   ./install/update/geonature-update.sh db
 #   ./install/update/geonature-update.sh frontend
 #   ./install/update/geonature-update.sh ref sensitivity-cache|sensitivity-synthese|profiles
+#   ./install/update/geonature-update.sh taxref analyse:18[:keep]   # étape 1 : analyse
+#   ./install/update/geonature-update.sh taxref apply:18[:keep]     # étape 2 : application
+#     (:keep = conserver les cd_nom disparus ; région Taxref : variable TAXREF_REGION, fr par défaut)
 #
 # Avec --from-request, les paramètres sont lus dans les variables d'environnement
 # ACTION, TARGET, MODULE_CODE, MODULE_REF, MODULE_DIR, MODULE_REPO, GITHUB_REPO et
@@ -60,10 +63,10 @@ done
 if [[ "${FROM_REQUEST}" == 0 ]]; then
     ACTION="${1:-}"
     case "${ACTION}" in
-        core|ref) TARGET="${2:-}" ;;
+        core|ref|taxref) TARGET="${2:-}" ;;
         module) MODULE_CODE="${2:-}"; MODULE_REF="${3:-}"; MODULE_DIR="${4:-}" ;;
         db|frontend) ;;
-        *) echo "Usage : $0 [--dry-run] [--no-backup] [--yes] {core VERSION|module CODE REF [DIR]|db|frontend|ref NOM}" >&2; exit 2 ;;
+        *) echo "Usage : $0 [--dry-run] [--no-backup] [--yes] {core VERSION|module CODE REF [DIR]|db|frontend|ref NOM|taxref ETAPE:VERSION[:keep]}" >&2; exit 2 ;;
     esac
 fi
 ACTION="${ACTION:-}"
@@ -74,6 +77,7 @@ MODULE_DIR="${MODULE_DIR:-}"
 MODULE_REPO="${MODULE_REPO:-}"
 GITHUB_REPO="${GITHUB_REPO:-PnX-SI/GeoNature}"
 BACKUP_DB="${BACKUP_DB:-1}"
+TAXREF_REGION="${TAXREF_REGION:-fr}"
 STATE_DIR="${STATE_DIR:-/var/lib/geonature/update}"
 LOG_DIR="${LOG_DIR:-/var/log/geonature/update}"
 
@@ -98,6 +102,14 @@ case "${ACTION}" in
             sensitivity-cache|sensitivity-synthese|profiles) ;;
             *) die_usage "référentiel inconnu : '${TARGET}'" ;;
         esac
+        ;;
+    taxref)
+        [[ "${TARGET}" =~ ^(analyse|apply):([0-9]{2})(:keep)?$ ]] || die_usage "demande Taxref invalide : '${TARGET}'"
+        TAXREF_STEP="${BASH_REMATCH[1]}"
+        TAXREF_VERSION="${BASH_REMATCH[2]}"
+        TAXREF_KEEP_CDNOM=0
+        if [[ -n "${BASH_REMATCH[3]}" ]]; then TAXREF_KEEP_CDNOM=1; fi
+        [[ "${TAXREF_REGION}" =~ ^[a-z]{2,5}$ ]] || die_usage "région Taxref invalide"
         ;;
     db|frontend) ;;
     *) die_usage "action inconnue : '${ACTION}'" ;;
@@ -449,6 +461,81 @@ do_ref() {
             ;;
     esac
     deactivate
+}
+
+do_taxref() {
+    local version="${TAXREF_VERSION}" workdir marker out blocked=0
+    local cli=(geonature taxref "migrate-to-v${version}")
+    workdir="${STATE_DIR}/taxref/v${version}"
+    marker="${STATE_DIR}/taxref/analysis-v${version}.json"
+    mkdir -p "${workdir}"
+    out="$(mktemp)"
+    activate_venv
+    # TaxHub écrit ses rapports CSV dans ./tmp/ : on travaille dans un dossier dédié.
+    cd "${workdir}"
+
+    if [[ "${TAXREF_STEP}" == analyse ]]; then
+        rm -rf "${workdir}/tmp" "${marker}"
+        step "Analyse de la migration vers Taxref v${version} (Taxref en service inchangé)"
+        run "${cli[@]}" "import-taxref-v${version}" 2>&1 | tee "${out}"
+        if [[ "${TAXREF_KEEP_CDNOM}" == 1 ]]; then
+            step "Nouvelle analyse en conservant les cd_nom disparus"
+            run "${cli[@]}" test-changes-detection --keep-cdnom 2>&1 | tee "${out}"
+        fi
+        # En cas de conflit bloquant, TaxHub s'arrête avec le code 0 : on lit sa sortie.
+        if grep -q "You can't continue migration" "${out}"; then blocked=1; fi
+        if [[ "${DRY_RUN}" == 0 ]]; then
+            printf '{"ok":%s,"keep_cdnom":%s,"date":"%s"}\n' \
+                "$([[ ${blocked} == 0 ]] && echo true || echo false)" \
+                "$([[ ${TAXREF_KEEP_CDNOM} == 1 ]] && echo true || echo false)" \
+                "$(date '+%d/%m/%Y %H:%M')" > "${marker}"
+        fi
+        echo "Rapports : ${workdir}/tmp/"
+        ls -1 "${workdir}/tmp/" 2>/dev/null || true
+        rm -f "${out}"
+        deactivate
+        if [[ ${blocked} == 1 ]]; then
+            FAIL_MESSAGE="Analyse terminée : conflits bloquants. Lisez les rapports CSV, corrigez puis relancez l'analyse."
+            false
+        fi
+        echo "Analyse terminée : aucun conflit bloquant. Lisez les rapports avant d'appliquer la migration."
+        return
+    fi
+
+    # Étape 2 : application
+    if [[ "${DRY_RUN}" == 0 ]]; then
+        if ! grep -q '"ok":true' "${marker}" 2>/dev/null; then
+            FAIL_MESSAGE="Aucune analyse sans conflit bloquant pour Taxref v${version} : lancez d'abord l'analyse."
+            false
+        fi
+        local expected=false
+        if [[ "${TAXREF_KEEP_CDNOM}" == 1 ]]; then expected=true; fi
+        if ! grep -q "\"keep_cdnom\":${expected}" "${marker}"; then
+            FAIL_MESSAGE="L'option « conserver les cd_nom disparus » doit être la même que lors de l'analyse."
+            false
+        fi
+    fi
+    stop_services
+    BACKUP_DB=1 backup_db  # sauvegarde toujours faite avant de toucher à Taxref
+    rollback_taxref() {
+        start_services
+        FAIL_MESSAGE="La migration vers Taxref v${version} n'est pas allée au bout. La base peut être dans un état intermédiaire : restaurez la sauvegarde ${DB_DUMP:-(aucune)} avec pg_restore --clean --if-exists. Consultez le journal."
+    }
+    ROLLBACK=rollback_taxref
+    local opts=(--keep-oldtaxref --keep-oldbdc --taxref-region "${TAXREF_REGION}")
+    if [[ "${TAXREF_KEEP_CDNOM}" == 1 ]]; then opts+=(--keep-cdnom); fi
+    step "Application de la migration vers Taxref v${version}"
+    run "${cli[@]}" apply-changes "${opts[@]}" 2>&1 | tee "${out}"
+    if [[ "${DRY_RUN}" == 0 ]] && ! grep -q "Import terminé" "${out}"; then
+        rm -f "${out}"
+        false
+    fi
+    rm -f "${out}" "${marker}"
+    deactivate
+    ROLLBACK=""
+    start_services
+    echo "Migration vers Taxref v${version} terminée."
+    echo "Pensez à installer le référentiel de sensibilité de Taxref v${version}, puis à rafraîchir le cache des règles."
 }
 
 "do_${ACTION}"

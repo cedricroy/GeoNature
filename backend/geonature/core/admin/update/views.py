@@ -1,7 +1,18 @@
 import secrets
 import time
 
-from flask import abort, current_app, g, jsonify, redirect, request, session, url_for, flash
+from flask import (
+    abort,
+    current_app,
+    flash,
+    g,
+    jsonify,
+    redirect,
+    request,
+    send_from_directory,
+    session,
+    url_for,
+)
 from flask_admin import BaseView, expose
 
 from geonature.core.admin.utils import CruvedProtectedMixin
@@ -36,6 +47,8 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
     def index(self):
         current = utils.installed_version()
         release = utils.latest_release()
+        taxref = utils.taxref_info()
+        taxref_next = utils.taxref_next_version(taxref["version"] if taxref else None)
         return self.render(
             "admin/update.html",
             current_version=current,
@@ -46,6 +59,22 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
             status=utils.read_status(),
             can_update=self._can_action("U"),
             csrf_token=_csrf_token(),
+            taxref=taxref,
+            taxref_next=taxref_next,
+            taxref_analysis=utils.taxref_analysis(taxref_next) if taxref_next else None,
+            taxref_reports=utils.taxref_reports(taxref_next) if taxref_next else [],
+        )
+
+    @expose("/taxref-report/<int:version>/<filename>")
+    def taxref_report(self, version, filename):
+        """Télécharger un rapport CSV de l'analyse Taxref."""
+        if not utils.TAXREF_REPORT_RE.match(filename):
+            abort(404)
+        return send_from_directory(
+            utils.taxref_work_dir(version) / "tmp",
+            filename,
+            as_attachment=True,
+            mimetype="text/csv",
         )
 
     @expose("/status")
@@ -63,6 +92,8 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
         target = request.form.get("target", "")
         if action == utils.ACTION_MODULE:
             target = f"{request.form.get('module_code', '')}:{target}"
+        elif action == utils.ACTION_TAXREF and request.form.get("keep_cdnom"):
+            target = f"{target}:keep"
         try:
             # Validation immédiate pour afficher l'erreur ; la tâche revalide.
             utils.validate_request(action, target)

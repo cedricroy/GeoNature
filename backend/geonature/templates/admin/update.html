@@ -119,9 +119,89 @@
       <li class="mb-1">{{ action_form('ref', 'Lancer', target=key, btn='btn-outline-primary', disabled=busy) }} {{ label }}</li>
     {% endfor %}
     </ul>
-    <p class="text-muted small mb-0">La migration vers une nouvelle version de Taxref n'est pas
-      proposée ici : elle demande d'analyser les conflits à la main. Suivez la documentation
-      de TaxHub.</p>
+  </div>
+</div>
+
+<!-- Taxref -->
+<div class="card mb-3">
+  <div class="card-header"><i class="fa fa-leaf"></i> Taxref (référentiel taxonomique)</div>
+  <div class="card-body">
+  {% if not taxref %}
+    <p class="text-muted mb-0">Impossible de lire la version de Taxref installée.</p>
+  {% else %}
+    <p class="mb-1">Version installée : <strong>Taxref v{{ taxref.version }}</strong>
+      {% if taxref.update_date %}<span class="text-muted">(depuis le {{ taxref.update_date.strftime('%d/%m/%Y') }})</span>{% endif %}</p>
+    <p class="mb-3 text-muted">{{ taxref.taxref_count }} taxons ·
+      statuts de protection actifs : {{ taxref.enabled_status_count }} / {{ taxref.status_count }}</p>
+
+    {% if not taxref_next %}
+      <span class="badge badge-success">Pas de migration disponible</span>
+      <span class="text-muted small">avec la version de TaxHub installée (les migrations se font une version après l'autre).</span>
+    {% else %}
+      <div class="alert alert-info py-2">
+        La version de TaxHub installée sait migrer vers <strong>Taxref v{{ taxref_next }}</strong>.
+        La migration se fait en deux étapes : une analyse, qui ne change rien au Taxref
+        utilisé, puis l'application. Voir la
+        <a href="https://taxhub.readthedocs.io/fr/latest/update-taxref-version.html" target="_blank" rel="noopener">documentation de TaxHub</a>.
+      </div>
+
+      <h6>Étape 1 : analyser</h6>
+      <p class="small mb-1">Télécharge Taxref v{{ taxref_next }} dans des tables temporaires et liste les
+        changements : noms modifiés, taxons fusionnés ou découpés, cd_nom disparus encore utilisés
+        dans vos données. Cela peut prendre un moment.</p>
+      <form method="post" action="{{ url_for('.run') }}" class="form-inline mb-2 update-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="taxref">
+        <input type="hidden" name="target" value="analyse:{{ taxref_next }}">
+        <div class="form-check mr-3">
+          <input class="form-check-input" type="checkbox" name="keep_cdnom" value="1" id="keep-cdnom-analyse"
+                 {% if taxref_analysis and taxref_analysis.keep_cdnom %}checked{% endif %}>
+          <label class="form-check-label small" for="keep-cdnom-analyse">Conserver les cd_nom disparus (au lieu de les supprimer)</label>
+        </div>
+        <button type="submit" class="btn btn-sm btn-primary update-btn"
+                {% if busy or not can_update %}disabled{% endif %}>Analyser</button>
+      </form>
+
+      {% if taxref_analysis %}
+        <div class="alert {{ 'alert-success' if taxref_analysis.ok else 'alert-danger' }} py-2 mb-2">
+          Dernière analyse ({{ taxref_analysis.date }}) :
+          {% if taxref_analysis.ok %}
+            <strong>aucun conflit bloquant.</strong> Lisez quand même les rapports, en particulier
+            <code>liste_split.csv</code> (taxons découpés en plusieurs).
+          {% else %}
+            <strong>conflits bloquants.</strong> Lisez les rapports, corrigez vos données (ou cochez
+            « conserver les cd_nom disparus » si le blocage vient de cd_nom disparus), puis relancez l'analyse.
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if taxref_reports %}
+        <p class="small mb-3">Rapports :
+        {% for name in taxref_reports %}
+          <a href="{{ url_for('.taxref_report', version=taxref_next, filename=name) }}" class="mr-2"><i class="fa fa-download"></i> {{ name }}</a>
+        {% endfor %}
+        </p>
+      {% endif %}
+
+      <h6>Étape 2 : appliquer</h6>
+      <p class="small mb-1">Remplace Taxref v{{ taxref.version }} par v{{ taxref_next }}. GeoNature est arrêté
+        pendant l'opération, et la base est sauvegardée avant. Les anciennes tables Taxref et
+        statuts sont conservées en copie.</p>
+      {% set apply_ok = taxref_analysis and taxref_analysis.ok %}
+      <form method="post" action="{{ url_for('.run') }}" class="d-inline update-form"
+            data-confirm="Appliquer la migration vers Taxref v{{ taxref_next }} ? GeoNature sera indisponible pendant l’opération.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="taxref">
+        <input type="hidden" name="target" value="apply:{{ taxref_next }}">
+        {% if apply_ok and taxref_analysis.keep_cdnom %}<input type="hidden" name="keep_cdnom" value="1">{% endif %}
+        <button type="submit" class="btn btn-sm btn-danger update-btn" {% if not apply_ok %}data-locked="1"{% endif %}
+                {% if busy or not can_update or not apply_ok %}disabled{% endif %}>Appliquer la migration</button>
+      </form>
+      {% if not apply_ok %}<span class="small text-muted ml-2">Disponible après une analyse sans conflit bloquant.</span>{% endif %}
+      <p class="small text-muted mt-3 mb-0">Après la migration, pensez à installer le référentiel de
+        sensibilité correspondant à la nouvelle version de Taxref (voir la documentation sur la sensibilité),
+        puis lancez « Sensibilité : rafraîchir le cache des règles ».</p>
+    {% endif %}
+  {% endif %}
   </div>
 </div>
 

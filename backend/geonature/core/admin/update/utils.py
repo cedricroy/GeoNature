@@ -25,7 +25,9 @@ REF_TARGETS = {
     "profiles": "Profils de taxons : recalculer les profils",
 }
 
-ACTIONS = {ACTION_CORE, ACTION_MODULE, ACTION_DB, ACTION_FRONTEND, ACTION_REF}
+ACTION_TAXREF = "taxref"
+
+ACTIONS = {ACTION_CORE, ACTION_MODULE, ACTION_DB, ACTION_FRONTEND, ACTION_REF, ACTION_TAXREF}
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([.-]?(a|b|rc|alpha|beta)\.?\d+)?$")
 MODULE_CODE_RE = re.compile(r"^[A-Z0-9_]{1,50}$")
@@ -275,6 +277,9 @@ def validate_request(action, target=None):
         if target not in REF_TARGETS:
             raise UpdateRequestError("Référentiel inconnu.")
         env["TARGET"] = target
+    elif action == ACTION_TAXREF:
+        _validate_taxref(target, env)
+        env["TARGET"] = target
     return env
 
 
@@ -292,3 +297,109 @@ def write_request(env):
         for key, value in env.items():
             f.write(f"{key}={_quote_env(value)}\n")
     tmp.replace(request_file())
+
+
+# --- Taxref -------------------------------------------------------------------
+# La migration de Taxref se fait en deux temps, avec les commandes de TaxHub :
+#   1. analyse : geonature taxref migrate-to-vNN import-taxref-vNN
+#      (import dans des tables temporaires + rapport des conflits, Taxref en
+#      service inchangé) ;
+#   2. application : geonature taxref migrate-to-vNN apply-changes
+#      (possible seulement après une analyse sans conflit bloquant).
+TAXREF_TARGET_RE = re.compile(r"^(analyse|apply):(\d{2})(:keep)?$")
+TAXREF_REPORT_RE = re.compile(r"^[a-z0-9_]{1,60}\.csv$")
+
+
+def taxref_info():
+    """Version de Taxref installée (None si la base n'est pas joignable)."""
+    try:
+        from apptax.taxonomie.repositories import TaxrefInfoRepository
+
+        info = TaxrefInfoRepository.getTaxrefInfo()
+    except Exception:
+        return None
+    version = info.get("taxref_version")
+    return {
+        "version": int(version.version) if version is not None else None,
+        "update_date": version.update_date if version is not None else None,
+        "taxref_count": info.get("taxref_count"),
+        "status_count": info.get("status_count"),
+        "enabled_status_count": info.get("enabled_status_count"),
+    }
+
+
+def taxref_available_migrations():
+    """Numéros de version vers lesquels la version de TaxHub installée sait migrer."""
+    try:
+        from apptax.taxonomie.commands.taxref import taxref as taxref_cli
+    except Exception:
+        return []
+    versions = []
+    for name in taxref_cli.commands:
+        match = re.match(r"^migrate[-_]to[-_]v(\d+)$", name)
+        if match:
+            versions.append(int(match.group(1)))
+    return sorted(versions)
+
+
+def taxref_next_version(current=None):
+    """Version suivante de Taxref si TaxHub sait y migrer, sinon None."""
+    if current is None:
+        info = taxref_info()
+        current = info and info["version"]
+    if not current:
+        return None
+    target = current + 1  # les migrations se font une version après l'autre
+    return target if target in taxref_available_migrations() else None
+
+
+def taxref_work_dir(version):
+    return state_dir() / "taxref" / f"v{int(version)}"
+
+
+def taxref_analysis(version):
+    """Résultat de la dernière analyse pour cette version (écrit par le script)."""
+    try:
+        with open(state_dir() / "taxref" / f"analysis-v{int(version)}.json") as f:
+            result = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def taxref_reports(version):
+    """Fichiers CSV produits par l'analyse (liste_changements.csv, liste_split.csv…)."""
+    report_dir = taxref_work_dir(version) / "tmp"
+    if not report_dir.is_dir():
+        return []
+    return sorted(p.name for p in report_dir.iterdir() if TAXREF_REPORT_RE.match(p.name))
+
+
+def _validate_taxref(target, env):
+    match = TAXREF_TARGET_RE.match(target)
+    if not match:
+        raise UpdateRequestError("Demande Taxref invalide.")
+    step, version, keep = match.group(1), int(match.group(2)), bool(match.group(3))
+    if version != taxref_next_version():
+        raise UpdateRequestError(
+            f"La migration vers Taxref v{version} n'est pas disponible "
+            "(elle se fait une version après l'autre, avec la version de TaxHub installée)."
+        )
+    if step == "apply":
+        analysis = taxref_analysis(version)
+        if not analysis or not analysis.get("ok"):
+            raise UpdateRequestError(
+                f"Lancez d'abord une analyse sans conflit bloquant pour Taxref v{version}."
+            )
+        if bool(analysis.get("keep_cdnom")) != keep:
+            raise UpdateRequestError(
+                "L'option « conserver les cd_nom disparus » doit être la même que lors de l'analyse."
+            )
+    env.update(
+        {
+            "TAXREF_STEP": step,
+            "TAXREF_VERSION": str(version),
+            "TAXREF_KEEP_CDNOM": "1" if keep else "0",
+            "TAXREF_REGION": updater_config()["TAXREF_REGION"],
+        }
+    )
