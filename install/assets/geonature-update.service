@@ -7,12 +7,12 @@ Type=oneshot
 User=${USER}
 Group=${USER}
 WorkingDirectory=${BASE_DIR}/
-# Fichier écrit par la tâche Celery geonature.core.admin.update.tasks.launch_update.
-# Si vous modifiez UPDATER.STATE_DIR dans geonature_config.toml, adaptez ce chemin.
-EnvironmentFile=/var/lib/geonature/update/request.env
 EnvironmentFile=-${BASE_DIR}/environ
-ExecStart=${BASE_DIR}/install/update/geonature-update.sh --from-request
+# request.env est écrit par la tâche Celery geonature.core.admin.update.tasks.launch_update.
+# Il est lu et validé par le script lui-même (et non par systemd, qui tourne en root).
+# Si vous modifiez UPDATER.STATE_DIR dans geonature_config.toml, adaptez ce chemin.
+ExecStart=${BASE_DIR}/install/update/geonature-update.sh --from-request /var/lib/geonature/update/request.env
 TimeoutStartSec=infinity
 # La mise à jour arrête geonature et geonature-worker : elle ne doit pas
-# appartenir à leur cgroup, d'où ce service séparé.
-KillMode=process
+# appartenir à leur cgroup, d'où ce service séparé. À l'arrêt du service, toutes
+# ses commandes reçoivent SIGTERM ; le script écrit alors l'état « failed ».

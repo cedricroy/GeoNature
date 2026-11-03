@@ -607,6 +607,10 @@ MEDIA_CLEAN_CRONTAB = "0 1 * * *"
 # Voir la documentation avant de l'activer (service systemd et droits sudo requis).
 [UPDATER]
     ENABLED = false
+    # Bouton « Mettre à jour GeoNature » : demande un sudo sans mot de passe complet (voir la documentation)
+    ALLOW_CORE_UPDATE = false
+    # Nombre de sauvegardes de la base conservées
+    BACKUP_KEEP = 5
     # Dépôt GitHub d'où sont téléchargées les nouvelles versions de GeoNature
     GITHUB_REPO = "PnX-SI/GeoNature"
     # Sauvegarde de la base (pg_dump) avant chaque mise à jour

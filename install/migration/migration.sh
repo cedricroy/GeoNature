@@ -49,7 +49,7 @@ else
 fi
 if [ "$choice" != 'y' ] && [ "$choice" != 'Y' ]; then
     echo "Arrêt de la migration."
-    exit
+    exit 1
 else
     echo "Lancement de la migration..."
 fi

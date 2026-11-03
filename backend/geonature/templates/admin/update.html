@@ -44,9 +44,16 @@
           avant la mise à jour.{% else %}<strong>Aucune sauvegarde automatique de la base</strong>
           (UPDATER.BACKUP_DB = false).{% endif %}
         </div>
+        {% if allow_core_update %}
         {{ action_form('core', 'Mettre à jour vers ' ~ release.version, target=release.version,
                        confirm='Mettre à jour GeoNature de ' ~ current_version ~ ' vers ' ~ release.version ~ ' ? L’application sera indisponible pendant la mise à jour.',
                        btn='btn-danger', disabled=busy) }}
+        {% else %}
+        <button type="button" class="btn btn-sm btn-danger" disabled data-locked="1">Mettre à jour vers {{ release.version }}</button>
+        <p class="small text-muted mt-2 mb-0">Le bouton est désactivé (<code>UPDATER.ALLOW_CORE_UPDATE = false</code>) :
+          il demande des droits administrateur complets sur le serveur. Lancez plutôt, en SSH :<br>
+          <code>cd ~/geonature &amp;&amp; ./install/update/geonature-update.sh core {{ release.version }}</code></p>
+        {% endif %}
       {% else %}
         <span class="badge badge-success">À jour</span>
       {% endif %}

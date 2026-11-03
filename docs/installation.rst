@@ -377,18 +377,34 @@ droit « U » de portée 3 pour lancer une opération.
 
 **Mise à jour de GeoNature.** Le script de migration modifie ``/etc`` (systemd, Apache). La mise à jour de
 GeoNature lui-même demande donc que l'utilisateur linux de GeoNature ait un sudo **sans mot de passe complet**.
-Sans lui, l'opération s'arrête avec un message explicite, et les autres actions restent disponibles. Le script
-se déroule ainsi :
+Avec ce droit, une faille dans l'application web donnerait accès à tout le serveur : le bouton est donc
+**désactivé par défaut**. Lancez plutôt la mise à jour en SSH (``./install/update/geonature-update.sh core
+X.Y.Z``), ou activez le bouton en connaissance de cause avec ``ALLOW_CORE_UPDATE = true`` dans la section
+``[UPDATER]``. Seule la dernière version publiée, plus récente que la version installée, est acceptée. Le
+script se déroule ainsi :
 
 * sauvegarde de la base avec ``pg_dump`` dans ``/var/lib/geonature/update/backups/``, sauf si
-  ``UPDATER.BACKUP_DB = false`` ;
+  ``UPDATER.BACKUP_DB = false``. Le mot de passe passe par un fichier ``.pgpass`` temporaire, jamais en
+  ligne de commande. Seules les ``UPDATER.BACKUP_KEEP`` (5) dernières sauvegardes sont conservées ;
 * installation faite depuis une archive : téléchargement de la nouvelle version, renommage de l'ancien dossier
   en ``geonature_old_<version>_<date>``, puis lancement de ``migration.sh`` ;
 * installation faite avec git : ``git fetch``, ``git checkout <tag>``, ``git submodule update`` puis
   ``migration.sh .`` ;
-* en cas d'échec, l'ancienne version des fichiers est restaurée et les services sont redémarrés. **La base de
-  données n'est pas restaurée automatiquement.** Si elle a déjà été migrée, restaurez la sauvegarde indiquée
-  dans le journal avec ``pg_restore --clean --if-exists -d <base> <fichier.dump>``.
+* la migration n'est considérée comme réussie que si ``migration.sh`` affiche « Migration terminée » et que
+  ``VERSION`` vaut la version cible (``migration.sh`` ne s'arrête pas toujours sur une erreur) ;
+* en cas d'échec ou d'interruption, l'ancienne version des fichiers est restaurée et les services sont
+  redémarrés. **La base de données n'est pas restaurée automatiquement.** Si elle a déjà été migrée,
+  restaurez la sauvegarde indiquée dans le journal. ``pg_restore --clean`` ne suffit pas, car il laisse les
+  tables créées par les nouvelles migrations. La procédure complète est écrite dans le journal :
+
+  .. code-block:: bash
+
+      sudo systemctl stop geonature geonature-worker
+      sudo -u postgres dropdb <base>
+      sudo -u postgres createdb -O <propriétaire> <base>
+      sudo -u postgres psql -d <base> -c 'CREATE EXTENSION IF NOT EXISTS postgis'
+      pg_restore -h localhost -U <propriétaire> -d <base> <fichier.dump>
+      sudo systemctl start geonature geonature-worker
 
 Lisez toujours les notes de version avant de cliquer : certaines versions demandent des actions manuelles,
 que le bouton ne fait pas à votre place.
@@ -414,5 +430,5 @@ l'autre. La migration se fait en deux étapes, avec les commandes de TaxHub :
 Après la migration, installez le référentiel de sensibilité de la nouvelle version de Taxref (voir
 :doc:`sensitivity`), puis lancez « Sensibilité : rafraîchir le cache des règles ».
 
-**Limites.** Si vous changez ``UPDATER.STATE_DIR``, adaptez aussi ``EnvironmentFile`` dans
+**Limites.** Si vous changez ``UPDATER.STATE_DIR``, adaptez aussi le chemin passé à ``--from-request`` dans
 ``/etc/systemd/system/geonature-update.service``.

@@ -1,3 +1,4 @@
+import os
 import json
 import subprocess
 from unittest import mock
@@ -94,8 +95,22 @@ class TestUpdateAdminView:
         assert response.status_code == 400
         mock_systemctl.assert_not_called()
 
-    def test_run_no_update_right(self, users, updater, mock_systemctl):
-        set_logged_user(self.client, users["self_user"])
+    def test_run_csrf_missing_session_token(self, users, updater, mock_systemctl):
+        """Session sans jeton + formulaire sans jeton : refusé (et non "" == "")."""
+        set_logged_user(self.client, users["admin_user"])
+        response = self.client.post(url_for("update.run"), data={"action": "db", "csrf_token": ""})
+        assert response.status_code == 400
+        response = self.client.post(url_for("update.run"), data={"action": "db"})
+        assert response.status_code == 400
+        mock_systemctl.assert_not_called()
+
+    def test_run_no_update_right(self, users, updater, mock_systemctl, monkeypatch):
+        """Lecture autorisée (R=3) mais pas de droit U de portée 3 : 403 sur /run."""
+        from geonature.core.admin.update.views import UpdateAdminView
+
+        monkeypatch.setattr(UpdateAdminView, "_can_action", lambda self, action: action == "R")
+        set_logged_user(self.client, users["admin_user"])
+        assert self.client.get(url_for("update.index")).status_code == 200
         token = self._set_csrf()
         response = self.client.post(
             url_for("update.run"), data={"action": "db", "csrf_token": token}
@@ -153,7 +168,14 @@ class TestUpdateAdminView:
 
 
 class TestUpdateUtils:
-    def test_validate_core(self, app, updater):
+    def test_validate_core_disabled_by_default(self, app, updater):
+        with pytest.raises(utils.UpdateRequestError, match="désactivée"):
+            utils.validate_request("core", "99.0.0")
+
+    def test_validate_core(self, app, updater, monkeypatch):
+        monkeypatch.setitem(updater, "ALLOW_CORE_UPDATE", True)
+        monkeypatch.setattr(utils, "installed_version", lambda: "2.17.5")
+        monkeypatch.setattr(utils, "latest_release", lambda repo=None: {"version": "2.17.6"})
         env = utils.validate_request("core", "2.17.6")
         assert env["ACTION"] == "core"
         assert env["TARGET"] == "2.17.6"
@@ -161,6 +183,12 @@ class TestUpdateUtils:
         for bad in ["", "2.17", "v2.17.6", "2.17.6\nACTION=x", "-2.17.6"]:
             with pytest.raises(utils.UpdateRequestError):
                 utils.validate_request("core", bad)
+        # Seule la dernière version publiée, et pas de retour en arrière
+        with pytest.raises(utils.UpdateRequestError):
+            utils.validate_request("core", "2.14.0")
+        monkeypatch.setattr(utils, "latest_release", lambda repo=None: {"version": "2.17.5"})
+        with pytest.raises(utils.UpdateRequestError):
+            utils.validate_request("core", "2.17.5")
 
     def test_validate_module(self, app, updater, monkeypatch):
         module = {
@@ -168,6 +196,7 @@ class TestUpdateUtils:
             "directory": "/home/gn/gn_module_mymod",
             "github_repo": "org/gn_module_mymod",
             "updatable": True,
+            "git": True,
         }
         monkeypatch.setattr(utils, "get_module", lambda code: module if code == "MYMOD" else None)
         env = utils.validate_request("module", "MYMOD:1.2.3")
@@ -176,6 +205,12 @@ class TestUpdateUtils:
         for bad in ["OTHER:1.0.0", "MYMOD:", "MYMOD:--upload-pack=x", "MYMOD:../x", "mymod:1.0"]:
             with pytest.raises(utils.UpdateRequestError):
                 utils.validate_request("module", bad)
+        assert utils.validate_request("module", "MYMOD:develop")["MODULE_REF"] == "develop"
+        # Module installé par archive : tags de version uniquement
+        module["git"] = False
+        assert utils.validate_request("module", "MYMOD:v1.2.3")["MODULE_REF"] == "v1.2.3"
+        with pytest.raises(utils.UpdateRequestError):
+            utils.validate_request("module", "MYMOD:develop")
         module["updatable"] = False
         with pytest.raises(utils.UpdateRequestError):
             utils.validate_request("module", "MYMOD:1.2.3")
@@ -194,6 +229,24 @@ class TestUpdateUtils:
         assert not utils.is_busy()
         utils.write_status(state="running")
         assert utils.is_busy()
+
+    def test_running_with_dead_process_is_not_busy(self, app, updater):
+        utils.write_status(state="running", pid=os.getpid())
+        assert utils.is_busy()
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        utils.write_status(state="running", pid=dead.pid)
+        assert not utils.is_busy()
+        assert utils.read_status()["state"] == "failed"
+
+    def test_read_log_tail_only_end(self, app, updater):
+        log_dir = utils.Path(updater["LOG_DIR"])
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "long.log"
+        log_file.write_text("".join(f"ligne {i}\n" for i in range(100000)))
+        utils.write_status(state="running", log_file=str(log_file))
+        tail = utils.read_log_tail(max_lines=50)
+        assert tail[-1] == "ligne 99999" and len(tail) == 50
 
     def test_task_sudo_failure(self, app, updater):
         completed = subprocess.CompletedProcess(

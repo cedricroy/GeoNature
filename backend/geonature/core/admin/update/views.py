@@ -54,6 +54,7 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
             current_version=current,
             release=release,
             core_update_available=bool(release and utils.is_newer(release["version"], current)),
+            allow_core_update=current_app.config["UPDATER"]["ALLOW_CORE_UPDATE"],
             modules=utils.list_modules(),
             ref_targets=utils.REF_TARGETS,
             status=utils.read_status(),
@@ -86,7 +87,9 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
         if not self._can_action("U"):
             abort(403)
         token = request.form.get("csrf_token", "")
-        if not secrets.compare_digest(token, session.get(CSRF_SESSION_KEY, "")):
+        expected = session.get(CSRF_SESSION_KEY, "")
+        # Un jeton absent d'un côté ou de l'autre est refusé (sinon "" == "" passerait).
+        if not expected or not token or not secrets.compare_digest(token, expected):
             abort(400, "Jeton CSRF invalide.")
         action = request.form.get("action", "")
         target = request.form.get("target", "")

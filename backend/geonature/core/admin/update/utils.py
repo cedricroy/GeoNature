@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -35,6 +36,8 @@ MODULE_CODE_RE = re.compile(r"^[A-Z0-9_]{1,50}$")
 # d'option) et ne contient pas « .. ».
 GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Pour un module installé par archive : seulement des tags de version (v1.2.3, 1.2.3-rc1…)
+TAG_RE = re.compile(r"^v?\d+(\.\d+)*([.-][A-Za-z0-9]+)*$")
 GITHUB_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(\.git)?/?$")
 
 STATE_RUNNING = ("queued", "running")
@@ -196,14 +199,38 @@ def write_status(**status):
 QUEUED_TIMEOUT_SECONDS = 600
 
 
+def process_is_alive(pid):
+    """Le processus du script de mise à jour existe-t-il encore ? (même utilisateur)"""
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (TypeError, ValueError, OSError):
+        return None
+    return True
+
+
 def is_busy():
     """
     Vrai si une mise à jour tourne. Une demande restée « queued » plus de
-    10 minutes (worker Celery arrêté, par exemple) ne bloque plus l'outil.
+    10 minutes (worker Celery arrêté, par exemple) ne bloque plus l'outil, ni un
+    état « running » alors que le script n'existe plus (tué, serveur redémarré).
     """
     status = read_status()
     state = status.get("state")
     if state == "running":
+        if status.get("pid") and process_is_alive(status["pid"]) is False:
+            write_status(
+                **dict(
+                    status,
+                    state="failed",
+                    message="Mise à jour interrompue (le script s'est arrêté avant la fin). "
+                    "Consultez le journal.",
+                )
+            )
+            return False
         return True
     if state == "queued":
         try:
@@ -222,10 +249,18 @@ def read_log_tail(max_lines=200):
     if log_dir not in log_path.parents:  # ne lit que dans LOG_DIR
         return []
     try:
-        with open(log_path, errors="replace") as f:
-            return f.read().splitlines()[-max_lines:]
+        with open(log_path, "rb") as f:
+            # Lit seulement la fin du fichier (le journal peut être long).
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 200 * max_lines))
+            data = f.read().decode(errors="replace")
     except OSError:
         return []
+    lines = data.splitlines()
+    if size > 200 * max_lines and lines:
+        lines = lines[1:]  # première ligne probablement tronquée
+    return lines[-max_lines:]
 
 
 def validate_request(action, target=None):
@@ -242,11 +277,27 @@ def validate_request(action, target=None):
         "BACKUP_DB": "1" if cfg["BACKUP_DB"] else "0",
         "STATE_DIR": cfg["STATE_DIR"],
         "LOG_DIR": cfg["LOG_DIR"],
+        "BACKUP_KEEP": str(int(cfg["BACKUP_KEEP"])),
     }
 
     if action == ACTION_CORE:
+        if not cfg["ALLOW_CORE_UPDATE"]:
+            raise UpdateRequestError(
+                "La mise à jour de GeoNature depuis l'interface est désactivée "
+                "(UPDATER.ALLOW_CORE_UPDATE). Utilisez la commande "
+                "./install/update/geonature-update.sh core <version> sur le serveur."
+            )
         if not VERSION_RE.match(target):
             raise UpdateRequestError("Version invalide (format attendu : X.Y.Z).")
+        release = latest_release()
+        if not release or target != release["version"]:
+            raise UpdateRequestError(
+                "Seule la dernière version publiée peut être installée depuis l'interface."
+            )
+        if not is_newer(target, installed_version()):
+            raise UpdateRequestError(
+                f"La version {target} n'est pas plus récente que la version installée."
+            )
         if not GITHUB_REPO_RE.match(cfg["GITHUB_REPO"]):
             raise UpdateRequestError("Paramètre UPDATER.GITHUB_REPO invalide.")
         env["TARGET"] = target
@@ -264,6 +315,11 @@ def validate_request(action, target=None):
             raise UpdateRequestError(
                 f"Le module {code} ne peut pas être mis à jour depuis l'interface "
                 "(module fourni avec GeoNature, ou dossier source introuvable)."
+            )
+        if not module.get("git") and not TAG_RE.match(ref):
+            raise UpdateRequestError(
+                f"Le module {code} n'est pas un clone git : indiquez un tag de version "
+                "(ex. 1.2.3), pas une branche ni un commit."
             )
         env.update(
             {

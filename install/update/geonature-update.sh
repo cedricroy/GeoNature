@@ -15,9 +15,9 @@
 #   ./install/update/geonature-update.sh taxref apply:18[:keep]     # étape 2 : application
 #     (:keep = conserver les cd_nom disparus ; région Taxref : variable TAXREF_REGION, fr par défaut)
 #
-# Avec --from-request, les paramètres sont lus dans les variables d'environnement
-# ACTION, TARGET, MODULE_CODE, MODULE_REF, MODULE_DIR, MODULE_REPO, GITHUB_REPO et
-# BACKUP_DB, chargées par systemd depuis STATE_DIR/request.env.
+# Avec --from-request FICHIER, les paramètres sont lus dans FICHIER (request.env écrit
+# par l'interface d'administration), que le script analyse et revalide lui-même :
+# lignes CLE="valeur", clés connues uniquement, sans caractère spécial.
 
 set -Eeuo pipefail
 
@@ -47,12 +47,13 @@ fi
 DRY_RUN=0
 YES=0
 FROM_REQUEST=0
+REQUEST_FILE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --no-backup) BACKUP_DB=0; shift ;;
         --yes|-y) YES=1; shift ;;
-        --from-request) FROM_REQUEST=1; YES=1; shift ;;
+        --from-request) FROM_REQUEST=1; YES=1; REQUEST_FILE="${2:-}"; shift 2 || shift ;;
         -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         --) shift; break ;;
         -*) echo "Option inconnue : $1" >&2; exit 2 ;;
@@ -60,7 +61,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${FROM_REQUEST}" == 0 ]]; then
+# Lecture stricte du fichier de demande (pas de « source » : aucune expansion shell)
+REQUEST_KEYS=" ACTION TARGET MODULE_CODE MODULE_REF MODULE_DIR MODULE_REPO GITHUB_REPO BACKUP_DB BACKUP_KEEP TAXREF_STEP TAXREF_VERSION TAXREF_KEEP_CDNOM TAXREF_REGION STATE_DIR LOG_DIR REQUESTED_BY "
+read_request() {
+    local file="$1" line key value
+    if [[ -z "${file}" || ! -f "${file}" ]]; then
+        echo "Fichier de demande introuvable : '${file}'" >&2
+        exit 2
+    fi
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -z "${line}" ]] && continue
+        if [[ ! "${line}" =~ ^([A-Z_]+)=\"([^\"\\\$\`]*)\"$ ]]; then
+            echo "Ligne invalide dans ${file} : ${line}" >&2
+            exit 2
+        fi
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        if [[ "${REQUEST_KEYS}" != *" ${key} "* ]]; then
+            echo "Clé inconnue dans ${file} : ${key}" >&2
+            exit 2
+        fi
+        printf -v "${key}" '%s' "${value}"
+    done < "${file}"
+}
+
+if [[ "${FROM_REQUEST}" == 1 ]]; then
+    read_request "${REQUEST_FILE}"
+else
     ACTION="${1:-}"
     case "${ACTION}" in
         core|ref|taxref) TARGET="${2:-}" ;;
@@ -77,12 +104,47 @@ MODULE_DIR="${MODULE_DIR:-}"
 MODULE_REPO="${MODULE_REPO:-}"
 GITHUB_REPO="${GITHUB_REPO:-PnX-SI/GeoNature}"
 BACKUP_DB="${BACKUP_DB:-1}"
+BACKUP_KEEP="${BACKUP_KEEP:-5}"
 TAXREF_REGION="${TAXREF_REGION:-fr}"
 STATE_DIR="${STATE_DIR:-/var/lib/geonature/update}"
 LOG_DIR="${LOG_DIR:-/var/log/geonature/update}"
 
+# --- Journal et statut ------------------------------------------------------------
+[[ "${STATE_DIR}" == /* && "${LOG_DIR}" == /* ]] || { echo "STATE_DIR et LOG_DIR doivent être absolus" >&2; exit 2; }
+[[ "${STATE_DIR}" != *..* && "${LOG_DIR}" != *..* ]] || { echo "Chemin invalide" >&2; exit 2; }
+TS="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/${TS}-${ACTION//[^a-z]/}-$$.log"
+STATUS_FILE="${STATE_DIR}/status.json"
+STARTED_AT="$(date -Iseconds)"
+TARGET_LABEL="${TARGET}"
+if [[ "${ACTION}" == module ]]; then TARGET_LABEL="${MODULE_CODE}:${MODULE_REF}"; fi
+RUNNER=cli
+if [[ "${FROM_REQUEST}" == 1 ]]; then RUNNER=service; fi
+
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/ }"; s="${s//$'\t'/ }"
+    printf '%s' "${s}"
+}
+
+write_status() {  # write_status STATE [MESSAGE]
+    local state="$1" message="${2:-}" finished=""
+    if [[ "${state}" != running ]]; then finished=",\"finished_at\":\"$(date -Iseconds)\""; fi
+    if [[ "${DRY_RUN}" == 1 ]]; then message="[dry-run] ${message}"; fi
+    printf '{"state":"%s","action":"%s","target":"%s","message":"%s","log_file":"%s","started_at":"%s","pid":%s,"runner":"%s"%s}\n' \
+        "${state}" "$(json_escape "${ACTION}")" "$(json_escape "${TARGET_LABEL}")" "$(json_escape "${message}")" \
+        "$(json_escape "${LOG_FILE}")" "${STARTED_AT}" "$$" "${RUNNER}" "${finished}" > "${STATUS_FILE}.tmp"
+    mv "${STATUS_FILE}.tmp" "${STATUS_FILE}"
+}
+
 # --- Validation (le backend valide déjà, on revalide ici) -----------------------
-die_usage() { echo "Erreur : $*" >&2; exit 2; }
+die_usage() {
+    echo "Erreur : $*" >&2
+    # Lancé par le service : la demande « queued » est la nôtre, on la marque en échec.
+    if [[ "${FROM_REQUEST}" == 1 ]]; then write_status failed "Demande invalide : $*"; fi
+    exit 2
+}
 re_version='^[0-9]+\.[0-9]+\.[0-9]+([.-]?(a|b|rc|alpha|beta)\.?[0-9]+)?$'
 re_code='^[A-Z0-9_]{1,50}$'
 re_ref='^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$'
@@ -90,12 +152,18 @@ re_repo='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 case "${ACTION}" in
     core)
         [[ "${TARGET}" =~ ${re_version} ]] || die_usage "version invalide : '${TARGET}'"
+        current_version="$(cat "${BASE_DIR}/VERSION" 2>/dev/null || echo 0)"
+        if [[ "$(printf '%s\n%s\n' "${current_version}" "${TARGET}" | sort -V | tail -n1)" != "${TARGET}" \
+            || "${current_version}" == "${TARGET}" ]]; then
+            die_usage "la version ${TARGET} n'est pas plus récente que la version installée (${current_version})"
+        fi
         [[ "${GITHUB_REPO}" =~ ${re_repo} ]] || die_usage "dépôt GitHub invalide"
         ;;
     module)
         [[ "${MODULE_CODE}" =~ ${re_code} ]] || die_usage "code de module invalide"
         [[ "${MODULE_REF}" =~ ${re_ref} && "${MODULE_REF}" != *..* ]] || die_usage "référence invalide"
         [[ -z "${MODULE_REPO}" || "${MODULE_REPO}" =~ ${re_repo} ]] || die_usage "dépôt du module invalide"
+        [[ -z "${MODULE_DIR}" || "${MODULE_DIR}" == /* ]] || die_usage "dossier du module invalide"
         ;;
     ref)
         case "${TARGET}" in
@@ -114,16 +182,9 @@ case "${ACTION}" in
     db|frontend) ;;
     *) die_usage "action inconnue : '${ACTION}'" ;;
 esac
+[[ "${BACKUP_KEEP}" =~ ^[0-9]{1,3}$ ]] || die_usage "BACKUP_KEEP invalide"
 
-# --- Journal, verrou et statut ------------------------------------------------
-TS="$(date +%Y%m%d-%H%M%S)"
-mkdir -p "${STATE_DIR}" "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/${TS}-${ACTION}-$$.log"
-STATUS_FILE="${STATE_DIR}/status.json"
-STARTED_AT="$(date -Iseconds)"
-TARGET_LABEL="${TARGET}"
-if [[ "${ACTION}" == module ]]; then TARGET_LABEL="${MODULE_CODE}:${MODULE_REF}"; fi
-
+# --- Verrou -------------------------------------------------------------------
 exec 9>"${STATE_DIR}/update.lock"
 if ! flock -n 9; then
     echo "Une mise à jour est déjà en cours, arrêt." >&2
@@ -131,22 +192,6 @@ if ! flock -n 9; then
 fi
 
 exec > >(tee -a "${LOG_FILE}") 2>&1
-
-json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/ }"; s="${s//$'\t'/ }"
-    printf '%s' "${s}"
-}
-
-write_status() {  # write_status STATE [MESSAGE]
-    local state="$1" message="${2:-}" finished=""
-    [[ "${state}" != running ]] && finished=",\"finished_at\":\"$(date -Iseconds)\""
-    [[ "${DRY_RUN}" == 1 ]] && message="[dry-run] ${message}"
-    printf '{"state":"%s","action":"%s","target":"%s","message":"%s","log_file":"%s","started_at":"%s"%s}\n' \
-        "${state}" "${ACTION}" "$(json_escape "${TARGET_LABEL}")" "$(json_escape "${message}")" \
-        "$(json_escape "${LOG_FILE}")" "${STARTED_AT}" "${finished}" > "${STATUS_FILE}.tmp"
-    mv "${STATUS_FILE}.tmp" "${STATUS_FILE}"
-}
 
 step() { echo; echo "==> $*"; }
 
@@ -174,6 +219,14 @@ on_error() {
     exit "${code}"
 }
 trap on_error ERR
+# Arrêt du service, Ctrl+C, fermeture du terminal : retour arrière et statut « failed »
+on_signal() {
+    FAIL_MESSAGE="Mise à jour interrompue (signal $1 reçu). Consultez le journal${DB_DUMP:+ ; sauvegarde de la base : ${DB_DUMP}}."
+    false || on_error
+}
+trap 'on_signal TERM' TERM
+trap 'on_signal INT' INT
+trap 'on_signal HUP' HUP
 
 write_status running "Mise à jour en cours…"
 echo "Mise à jour GeoNature – action '${ACTION}' ${TARGET_LABEL} – $(date)"
@@ -192,6 +245,8 @@ activate_venv() {
 
 stop_services() {
     step "Arrêt des services"
+    # Si quoi que ce soit échoue ensuite, les services sont au moins redémarrés.
+    if [[ -z "${ROLLBACK}" ]]; then ROLLBACK=start_services; fi
     local s
     for s in "${SERVICES[@]}"; do run sudo -n systemctl stop "${s}"; done
 }
@@ -202,6 +257,42 @@ start_services() {
     for s in "${SERVICES[@]}"; do run sudo -n systemctl start "${s}"; done
 }
 
+DB_HOST="" DB_PORT="" DB_USER="" DB_NAME=""
+load_db_params() {  # à appeler venv activé ; ne garde jamais le mot de passe dans une variable exportée
+    if [[ -n "${DB_NAME}" ]]; then return 0; fi
+    if [[ "${DRY_RUN}" == 1 ]]; then
+        DB_HOST="<hôte>" DB_PORT="<port>" DB_USER="<propriétaire>" DB_NAME="<base>"
+        return 0
+    fi
+    local params
+    mapfile -t params < <(python3 - <<'PY'
+from urllib.parse import urlparse, unquote
+from geonature.utils.config import config
+u = urlparse(config["SQLALCHEMY_DATABASE_URI"])
+print(u.hostname or "localhost")
+print(u.port or 5432)
+print(unquote(u.username or ""))
+print(unquote(u.path.lstrip("/")))
+PY
+)
+    if [[ ${#params[@]} -lt 4 ]]; then
+        FAIL_MESSAGE="Impossible de lire les paramètres de connexion à la base (geonature_config.toml)."
+        return 1
+    fi
+    DB_HOST="${params[0]}" DB_PORT="${params[1]}" DB_USER="${params[2]}" DB_NAME="${params[3]}"
+}
+
+restore_hint() {  # procédure de restauration complète de la sauvegarde
+    [[ -n "${DB_DUMP:-}" ]] || return 0
+    echo "Pour revenir à l'état de la base avant la mise à jour :"
+    echo "  sudo systemctl stop geonature geonature-worker"
+    echo "  sudo -u postgres dropdb ${DB_NAME:-<base>}"
+    echo "  sudo -u postgres createdb -O ${DB_USER:-<propriétaire>} ${DB_NAME:-<base>}"
+    echo "  sudo -u postgres psql -d ${DB_NAME:-<base>} -c 'CREATE EXTENSION IF NOT EXISTS postgis'"
+    echo "  pg_restore -h ${DB_HOST:-localhost} -U ${DB_USER:-<propriétaire>} -d ${DB_NAME:-<base>} ${DB_DUMP}"
+    echo "  sudo systemctl start geonature geonature-worker"
+}
+
 backup_db() {
     if [[ "${BACKUP_DB}" != 1 ]]; then
         echo "Sauvegarde de la base désactivée."
@@ -209,16 +300,65 @@ backup_db() {
     fi
     step "Sauvegarde de la base de données"
     mkdir -p "${STATE_DIR}/backups"
-    local uri dump
-    uri="$(geonature get-config SQLALCHEMY_DATABASE_URI)"
-    uri="${uri/+psycopg2/}"
+    local dump passfile
     dump="${STATE_DIR}/backups/geonature-${TS}.dump"
-    echo "+ pg_dump -Fc -f ${dump} <base GeoNature>"
+    load_db_params
+    echo "+ pg_dump -Fc -h ${DB_HOST} -p ${DB_PORT} -U ${DB_USER} -f ${dump} ${DB_NAME}"
     if [[ "${DRY_RUN}" == 0 ]]; then
-        (umask 077; pg_dump -Fc -f "${dump}" -d "${uri}")
+        # Mot de passe dans un fichier .pgpass temporaire (0600), jamais en argument (visible par ps)
+        passfile="$(umask 077; mktemp)"
+        python3 - "${passfile}" <<'PY'
+import sys
+from urllib.parse import urlparse, unquote
+from geonature.utils.config import config
+u = urlparse(config["SQLALCHEMY_DATABASE_URI"])
+esc = lambda v: str(v).replace("\\", "\\\\").replace(":", "\\:")
+with open(sys.argv[1], "w") as f:
+    f.write(":".join(esc(x) for x in (
+        u.hostname or "localhost", u.port or 5432, unquote(u.path.lstrip("/")),
+        unquote(u.username or ""), unquote(u.password or ""))) + "\n")
+PY
+        local rc=0
+        (umask 077; PGPASSFILE="${passfile}" pg_dump -Fc -h "${DB_HOST}" -p "${DB_PORT}" \
+            -U "${DB_USER}" -f "${dump}" "${DB_NAME}") || rc=$?
+        rm -f "${passfile}"
+        if [[ ${rc} != 0 ]]; then
+            FAIL_MESSAGE="Échec de la sauvegarde de la base (pg_dump), mise à jour annulée."
+            return "${rc}"
+        fi
     fi
     DB_DUMP="${dump}"
     echo "Sauvegarde : ${dump}"
+    # Ne garder que les BACKUP_KEEP sauvegardes les plus récentes
+    if [[ "${DRY_RUN}" == 0 && "${BACKUP_KEEP}" -gt 0 ]]; then
+        find "${STATE_DIR}/backups" -maxdepth 1 -name 'geonature-*.dump' -printf '%T@ %p\n' \
+            | sort -rn | tail -n +"$((BACKUP_KEEP + 1))" | cut -d' ' -f2- | xargs -r rm -f --
+    fi
+}
+
+run_migration() {  # run_migration DOSSIER_GEONATURE ANCIEN_DOSSIER VERSION_ATTENDUE
+    local dir="$1" old="$2" expected="$3" out
+    out="$(mktemp)"
+    if [[ "${DRY_RUN}" == 1 ]]; then
+        echo "+ GN_MIGRATION_NONINTERACTIVE=1 ${dir}/install/migration/migration.sh ${old} < (yes y)"
+        rm -f "${out}"
+        return 0
+    fi
+    # « yes y » répond à la confirmation des versions officielles de migration.sh, qui ne
+    # connaissent pas GN_MIGRATION_NONINTERACTIVE (sous systemd, stdin = /dev/null).
+    (cd "${dir}" && GN_MIGRATION_NONINTERACTIVE=1 ./install/migration/migration.sh "${old}" < <(yes y)) 2>&1 \
+        | tee "${out}"
+    # migration.sh n'a pas de « set -e » : son code de sortie ne suffit pas.
+    if ! grep -q "Migration terminée" "${out}"; then
+        rm -f "${out}"
+        FAIL_MESSAGE="La migration ne s'est pas terminée (ligne « Migration terminée » absente). Consultez le journal."
+        return 1
+    fi
+    rm -f "${out}"
+    if [[ "$(cat "${dir}/VERSION")" != "${expected}" ]]; then
+        FAIL_MESSAGE="Après migration, la version installée n'est pas ${expected}."
+        return 1
+    fi
 }
 
 download_archive() {  # download_archive REPO TAG DEST_DIR
@@ -257,6 +397,7 @@ do_core() {
     fi
 
     activate_venv
+    load_db_params
     stop_services
     backup_db
     deactivate
@@ -277,22 +418,16 @@ do_core() {
         fi
         start_services
         echo "Les fichiers ont été restaurés."
-        if [[ -n "${DB_DUMP:-}" ]]; then
-            echo "Si la base de données a déjà été migrée, restaurez la sauvegarde :"
-            echo "  pg_restore --clean --if-exists -d <base> ${DB_DUMP}"
-        fi
-        FAIL_MESSAGE="Échec de la mise à jour vers ${version}. Les fichiers de la version ${current} ont été restaurés${DB_DUMP:+ ; sauvegarde de la base : ${DB_DUMP}}. Consultez le journal."
+        echo "Si la base de données a déjà été migrée :"
+        restore_hint
+        FAIL_MESSAGE="${FAIL_MESSAGE:-Échec de la migration.} Les fichiers de la version ${current} ont été restaurés${DB_DUMP:+ ; si la base a déjà été migrée, restaurez la sauvegarde ${DB_DUMP} (procédure dans le journal)}."
     }
     ROLLBACK=rollback_core
     run mv "${BASE_DIR}" "${olddir}"
     run mv "${newdir}" "${BASE_DIR}"
 
     step "Migration (install/migration/migration.sh)"
-    if [[ "${DRY_RUN}" == 0 ]]; then
-        (cd "${BASE_DIR}/install/migration" && GN_MIGRATION_NONINTERACTIVE=1 ./migration.sh "${olddir}")
-    else
-        echo "+ GN_MIGRATION_NONINTERACTIVE=1 ${BASE_DIR}/install/migration/migration.sh ${olddir}"
-    fi
+    run_migration "${BASE_DIR}" "${olddir}" "${version}"
     ROLLBACK=""
     echo "Ancienne version conservée dans ${olddir} (à supprimer quand tout fonctionne)."
 }
@@ -312,6 +447,7 @@ do_core_git() {  # installation de GeoNature faite avec git : mise à jour sur p
     fi
 
     activate_venv
+    load_db_params
     stop_services
     backup_db
     deactivate
@@ -319,19 +455,20 @@ do_core_git() {  # installation de GeoNature faite avec git : mise à jour sur p
     rollback_core_git() {
         git -C "${BASE_DIR}" checkout --detach "${previous}"
         git -C "${BASE_DIR}" submodule update --init --recursive
+        # Le venv et le frontend ont pu être reconstruits pour la nouvelle version.
+        (cd "${BASE_DIR}/install" && ./01_install_backend.sh) < /dev/null || echo "!! Réinstallation du backend impossible"
+        (activate_venv && geonature update-configuration) || echo "!! Rebuild du frontend impossible"
         start_services
-        FAIL_MESSAGE="Échec de la mise à jour vers ${version}, retour au commit ${previous:0:10} (version ${current})${DB_DUMP:+ ; sauvegarde de la base : ${DB_DUMP}}. Consultez le journal."
+        echo "Si la base de données a déjà été migrée :"
+        restore_hint
+        FAIL_MESSAGE="${FAIL_MESSAGE:-Échec de la migration.} Retour au commit ${previous:0:10} (version ${current})${DB_DUMP:+ ; si la base a déjà été migrée, restaurez la sauvegarde ${DB_DUMP} (procédure dans le journal)}."
     }
     ROLLBACK=rollback_core_git
     run git -C "${BASE_DIR}" checkout --detach "refs/tags/${version}"
     run git -C "${BASE_DIR}" submodule update --init --recursive
 
     step "Migration (install/migration/migration.sh .)"
-    if [[ "${DRY_RUN}" == 0 ]]; then
-        (cd "${BASE_DIR}" && GN_MIGRATION_NONINTERACTIVE=1 ./install/migration/migration.sh .)
-    else
-        echo "+ GN_MIGRATION_NONINTERACTIVE=1 ./install/migration/migration.sh ."
-    fi
+    run_migration "${BASE_DIR}" "${BASE_DIR}" "${version}"
     ROLLBACK=""
 }
 
@@ -352,6 +489,7 @@ do_module() {
     echo "Dossier du module : ${dir}"
 
     activate_venv
+    load_db_params
     backup_db
     deactivate
 
@@ -363,18 +501,28 @@ do_module() {
         fi
         previous="$(git -C "${dir}" rev-parse HEAD)"
         run git -C "${dir}" fetch --tags --force origin
-        local ref="${MODULE_REF}"
-        if ! git -C "${dir}" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null \
-            && git -C "${dir}" rev-parse --verify --quiet "origin/${ref}^{commit}" >/dev/null; then
-            ref="origin/${ref}"
+        # Ordre : tag, puis branche distante (jamais une branche locale périmée), puis commit
+        local ref=""
+        if git -C "${dir}" rev-parse --verify --quiet "refs/tags/${MODULE_REF}^{commit}" >/dev/null; then
+            ref="refs/tags/${MODULE_REF}"
+        elif git -C "${dir}" rev-parse --verify --quiet "refs/remotes/origin/${MODULE_REF}^{commit}" >/dev/null; then
+            ref="refs/remotes/origin/${MODULE_REF}"
+        elif [[ "${MODULE_REF}" =~ ^[0-9a-f]{7,40}$ ]] \
+            && git -C "${dir}" rev-parse --verify --quiet "${MODULE_REF}^{commit}" >/dev/null; then
+            ref="${MODULE_REF}"
+        elif [[ "${DRY_RUN}" == 0 ]]; then
+            FAIL_MESSAGE="Référence ${MODULE_REF} introuvable (ni tag, ni branche distante, ni commit) dans ${dir}."
+            false
         fi
         rollback_module() {
             run git -C "${dir}" checkout --detach "${previous}"
             activate_venv
             geonature install-gn-module "${dir}" "${MODULE_CODE}" --build=false --upgrade-db=false || true
+            geonature update-configuration || echo "!! Rebuild du frontend impossible"
             deactivate || true
             start_services
-            FAIL_MESSAGE="Échec de la mise à jour du module ${MODULE_CODE}, retour au commit ${previous:0:10}. Consultez le journal."
+            restore_hint
+            FAIL_MESSAGE="Échec de la mise à jour du module ${MODULE_CODE}, retour au commit ${previous:0:10}${DB_DUMP:+ ; si la base du module a déjà été migrée, restaurez la sauvegarde ${DB_DUMP} (procédure dans le journal)}."
         }
         stop_services
         ROLLBACK=rollback_module
@@ -383,6 +531,10 @@ do_module() {
     else
         if [[ -z "${MODULE_REPO}" ]]; then
             FAIL_MESSAGE="Le module ${MODULE_CODE} n'est pas un clone git et son dépôt GitHub est inconnu."
+            false
+        fi
+        if [[ ! "${MODULE_REF}" =~ ^v?[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9]+)*$ ]]; then
+            FAIL_MESSAGE="Le module ${MODULE_CODE} n'est pas un clone git : seul un tag de version est accepté."
             false
         fi
         newdir="${dir}_new_${TS}"
@@ -400,9 +552,11 @@ do_module() {
             fi
             activate_venv
             geonature install-gn-module "${dir}" "${MODULE_CODE}" --build=false --upgrade-db=false || true
+            geonature update-configuration || echo "!! Rebuild du frontend impossible"
             deactivate || true
             start_services
-            FAIL_MESSAGE="Échec de la mise à jour du module ${MODULE_CODE}, ancienne version restaurée. Consultez le journal."
+            restore_hint
+            FAIL_MESSAGE="Échec de la mise à jour du module ${MODULE_CODE}, ancienne version restaurée${DB_DUMP:+ ; si la base du module a déjà été migrée, restaurez la sauvegarde ${DB_DUMP} (procédure dans le journal)}."
         }
         stop_services
         ROLLBACK=rollback_module
@@ -428,6 +582,7 @@ do_module() {
 
 do_db() {
     activate_venv
+    load_db_params
     backup_db
     step "Mise à jour de la base de données"
     run geonature db autoupgrade
@@ -515,18 +670,24 @@ do_taxref() {
             false
         fi
     fi
+    load_db_params
     stop_services
     BACKUP_DB=1 backup_db  # sauvegarde toujours faite avant de toucher à Taxref
     rollback_taxref() {
         start_services
-        FAIL_MESSAGE="La migration vers Taxref v${version} n'est pas allée au bout. La base peut être dans un état intermédiaire : restaurez la sauvegarde ${DB_DUMP:-(aucune)} avec pg_restore --clean --if-exists. Consultez le journal."
+        restore_hint
+        FAIL_MESSAGE="La migration vers Taxref v${version} n'est pas allée au bout. La base peut être dans un état intermédiaire : restaurez la sauvegarde ${DB_DUMP:-(aucune)} (procédure dans le journal)."
     }
     ROLLBACK=rollback_taxref
-    local opts=(--keep-oldtaxref --keep-oldbdc --taxref-region "${TAXREF_REGION}")
+    local opts=(--keep-oldtaxref --keep-oldbdc)
+    # --taxref-region n'existe qu'à partir de la commande de migration vers la v17
+    if [[ "${version}" -ge 17 ]]; then opts+=(--taxref-region "${TAXREF_REGION}"); fi
     if [[ "${TAXREF_KEEP_CDNOM}" == 1 ]]; then opts+=(--keep-cdnom); fi
     step "Application de la migration vers Taxref v${version}"
     run "${cli[@]}" apply-changes "${opts[@]}" 2>&1 | tee "${out}"
-    if [[ "${DRY_RUN}" == 0 ]] && ! grep -q "Import terminé" "${out}"; then
+    # TaxHub journalise certaines erreurs sans s'arrêter, puis écrit « Import terminé ».
+    if [[ "${DRY_RUN}" == 0 ]] && { ! grep -q "Import terminé" "${out}" \
+        || grep -q "taxref_migration - ERROR" "${out}"; }; then
         rm -f "${out}"
         false
     fi

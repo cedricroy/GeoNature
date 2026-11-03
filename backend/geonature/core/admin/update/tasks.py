@@ -35,7 +35,19 @@ def launch_update(self, action, target=None, id_role=None):
         return
     if id_role is not None:
         env["REQUESTED_BY"] = str(int(id_role))
-    utils.write_request(env)
+    try:
+        utils.write_request(env)
+    except (utils.UpdateRequestError, OSError) as exc:
+        utils.write_status(
+            state="failed",
+            message=f"Demande impossible à écrire : {exc}",
+            finished_at=_now(),
+            **base_status,
+        )
+        return
+    # « queued » est écrit AVANT le démarrage du service : le script le remplace
+    # ensuite par « running » / « failed » / « success » sans risque d'être écrasé.
+    utils.write_status(state="queued", queued_at=_now(), queued_ts=time.time(), **base_status)
     service = utils.updater_config()["SERVICE_NAME"]
     cmd = ["sudo", "-n", "systemctl", "start", "--no-block", service]
     logger.info("Lancement de %s (%s %s)", service, action, target or "")
@@ -58,5 +70,3 @@ def launch_update(self, action, target=None, id_role=None):
             **base_status,
         )
         return
-    # Le script passera l'état à « running » dès son démarrage.
-    utils.write_status(state="queued", queued_at=_now(), queued_ts=time.time(), **base_status)

@@ -132,6 +132,11 @@ class UpdaterConfig(Schema):
     """
 
     ENABLED = fields.Boolean(load_default=False)
+    # Bouton « Mettre à jour GeoNature » : demande un sudo sans mot de passe complet pour
+    # l'utilisateur GeoNature. Désactivé par défaut (voir la documentation).
+    ALLOW_CORE_UPDATE = fields.Boolean(load_default=False)
+    # Nombre de sauvegardes de la base conservées dans STATE_DIR/backups
+    BACKUP_KEEP = fields.Integer(load_default=5)
     GITHUB_REPO = fields.String(load_default="PnX-SI/GeoNature")
     BACKUP_DB = fields.Boolean(load_default=True)
     STATE_DIR = fields.String(load_default="/var/lib/geonature/update")
