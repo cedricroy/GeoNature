@@ -613,9 +613,12 @@ def export(scope):
     if current_app.config["OCCTAX"]["ADD_MEDIA_IN_EXPORT"]:
         q, columns = releve_repository.add_media_in_export(q, columns)
 
-    data = db.session.execute(q)
+    data = db.session.execute(q).all()
 
-    print(data)
+    # Suivi des téléchargements par organisme producteur
+    from geonature.core.export_tracking.tracking import SOURCE_OCCTAX, track_module_export
+
+    track_module_export(SOURCE_OCCTAX, data, export_format)
 
     file_name = datetime.datetime.now().strftime("%Y_%m_%d_%Hh%Mm%S")
     file_name = filemanager.removeDisallowedFilenameChars(file_name)

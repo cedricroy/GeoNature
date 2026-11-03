@@ -274,6 +274,11 @@ def export_all_habitats(
         .where(export_view.tableDef.columns.id_station.in_(data["idsStation"]))
         .limit(blueprint.config["NB_MAX_EXPORT"])
     ).all()
+
+    # Suivi des téléchargements par organisme producteur (une ligne = un habitat)
+    from geonature.core.export_tracking.tracking import SOURCE_OCCHAB, track_module_export
+
+    track_module_export(SOURCE_OCCHAB, results, export_format)
     if export_format == "csv":
         formated_data = [export_view.as_dict(d, fields=[]) for d in results]
         return to_csv_resp(file_name, formated_data, separator=";", columns=columns_to_serialize)

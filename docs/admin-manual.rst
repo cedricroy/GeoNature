@@ -2528,6 +2528,8 @@ ses observations, un bureau d'études les télécharge, et asso1 le voit.
 **Ce qui est suivi**
 
 * Synthèse : export d'observations (tous formats) et export des métadonnées ;
+* Occtax : export des relevés et observations (tous formats) ;
+* Occhab : export des stations (tous formats ; une ligne = un habitat) ;
 * module Export : son API (``/exports/api/<id>``), publique ou avec jeton, et les fichiers générés.
 
 Chaque téléchargement est compté **par jour et par jeu de données**. L'organisme producteur est retrouvé

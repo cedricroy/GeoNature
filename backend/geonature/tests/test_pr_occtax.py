@@ -9,6 +9,7 @@ import pytest
 from flask import Flask, url_for, current_app, g
 from werkzeug.exceptions import Unauthorized, Forbidden, NotFound, BadRequest, Conflict
 from sqlalchemy import func, select
+import sqlalchemy as sa
 from click.testing import CliRunner
 
 from geonature.core.gn_synthese.models import Synthese
@@ -791,6 +792,32 @@ class TestOcctaxGetReleveFilter:
             ),
         )
         assert response.status_code == 200
+
+    def test_export_occtax_is_tracked(
+        self, users: dict, datasets: dict[Any, TDatasets], occurrence, monkeypatch
+    ):
+        """L'export Occtax est compté par jeu de données dans le suivi des exports."""
+        cfg = dict(current_app.config["EXPORT_TRACKING"], ENABLED=True)
+        monkeypatch.setitem(current_app.config, "EXPORT_TRACKING", cfg)
+        set_logged_user(self.client, users["user"])
+        id_dataset = datasets["own_dataset"].id_dataset
+        response = self.client.get(
+            url_for("pr_occtax.export", format="csv", id_dataset=id_dataset),
+        )
+        assert response.status_code == 200
+        nb_rows = len(response.data.decode().strip().splitlines()) - 1
+        tracked = db.session.execute(
+            sa.text(
+                "SELECT t.source, t.requester_id_organisme, c.id_dataset, c.nb_observations "
+                "FROM gn_commons.t_export_tracking t "
+                "JOIN gn_commons.cor_export_tracking_dataset c USING (id_tracking)"
+            )
+        ).all()
+        assert sum(row.nb_observations for row in tracked) == nb_rows
+        assert {row.source for row in tracked} == {"occtax"}
+        assert {row.requester_id_organisme for row in tracked} == {users["user"].id_organisme}
+        if nb_rows:
+            assert {row.id_dataset for row in tracked} == {id_dataset}
 
     def test_export_occtax_no_additional(
         self, users: dict, datasets: dict[Any, TDatasets], occurrence

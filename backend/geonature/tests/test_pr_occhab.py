@@ -698,6 +698,31 @@ class TestOcchab:
         station_example.id_digitiser = None
         assert station_example.has_instance_permission(scope=1) is True
 
+    def test_export_occhab_is_tracked(self, stations, users, monkeypatch):
+        """L'export Occhab est compté par jeu de données dans le suivi des exports."""
+        cfg = dict(current_app.config["EXPORT_TRACKING"], ENABLED=True)
+        monkeypatch.setitem(current_app.config, "EXPORT_TRACKING", cfg)
+        set_logged_user(self.client, users["admin_user"])
+        data = {"idsStation": [stations["station_1"].id_station, stations["station_2"].id_station]}
+        response = self.client.post(
+            url_for("occhab.export_all_habitats", export_format="csv"), data=data
+        )
+        assert response.status_code == 200
+        nb_rows = len(pd.read_csv(StringIO(response.data.decode("utf-8")), sep=";"))
+        tracked = db.session.execute(
+            sa.text(
+                "SELECT t.source, c.id_dataset, c.nb_observations "
+                "FROM gn_commons.t_export_tracking t "
+                "JOIN gn_commons.cor_export_tracking_dataset c USING (id_tracking)"
+            )
+        ).all()
+        assert {row.source for row in tracked} == {"occhab"}
+        assert sum(row.nb_observations for row in tracked) == nb_rows
+        assert {row.id_dataset for row in tracked} == {
+            stations["station_1"].id_dataset,
+            stations["station_2"].id_dataset,
+        }
+
     def test_export_occhab(self, stations, users):
         """
         Check if the export route in OCCHAB works and if the returned data is consistent.

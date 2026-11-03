@@ -20,12 +20,16 @@ SOURCE_SYNTHESE_OBSERVATIONS = "synthese_observations"
 SOURCE_SYNTHESE_METADATA = "synthese_metadata"
 SOURCE_EXPORT_API = "export_api"
 SOURCE_EXPORT_FILE = "export_file"
+SOURCE_OCCTAX = "occtax"
+SOURCE_OCCHAB = "occhab"
 
 SOURCE_LABELS = {
     SOURCE_SYNTHESE_OBSERVATIONS: "Synthèse : export d'observations",
     SOURCE_SYNTHESE_METADATA: "Synthèse : export des métadonnées",
     SOURCE_EXPORT_API: "Module Export : API",
     SOURCE_EXPORT_FILE: "Module Export : fichier",
+    SOURCE_OCCTAX: "Occtax : export",
+    SOURCE_OCCHAB: "Occhab : export des stations",
 }
 
 REQUESTER_ORGANISME = "organisme"  # demandeur connu, avec un organisme
@@ -146,6 +150,36 @@ def count_by_dataset_from_rows(rows):
         if column in sample:
             return count_by_dataset_from_synthese(column, [r.get(column) for r in rows])
     return Counter({UNKNOWN_DATASET: len(rows)})
+
+
+def count_by_dataset_from_result(rows):
+    """
+    Compte par jeu de données à partir de lignes SQLAlchemy (Row) d'une vue d'export.
+    Lit seulement la colonne id_dataset (ou id_synthese / unique_id_sinp), sans copier les lignes.
+    """
+    rows = list(rows)
+    if not rows:
+        return Counter()
+    keys = set(rows[0]._mapping.keys())
+    if "id_dataset" in keys:
+        return Counter(r._mapping["id_dataset"] or UNKNOWN_DATASET for r in rows)
+    for column in ("id_synthese", "unique_id_sinp"):
+        if column in keys:
+            return count_by_dataset_from_synthese(column, [r._mapping[column] for r in rows])
+    return Counter({UNKNOWN_DATASET: len(rows)})
+
+
+def track_module_export(source, rows, export_format):
+    """Raccourci pour les exports des modules (Occtax, Occhab…)."""
+    if not is_enabled():
+        return
+    try:
+        counts = count_by_dataset_from_result(rows)
+    except Exception:
+        log.exception("Suivi des exports : décompte impossible")
+        db.session.rollback()
+        return
+    record_export(source, counts, requester_from_request(), export_format=export_format)
 
 
 # --- Enregistrement ------------------------------------------------------------------

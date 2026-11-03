@@ -4,7 +4,7 @@
 
 ### 🚀 Nouveautés
 
-- [Exports] Suivi des téléchargements de données naturalistes par organisme producteur (`[EXPORT_TRACKING]`, désactivé par défaut). Les exports d'observations et de métadonnées de la Synthèse, ainsi que les exports du module Export (API publique ou à jeton, fichiers), sont comptés par jour et par jeu de données. Chaque organisme voit les téléchargements de ses données sur `/export_tracking/mes-donnees`, et peut recevoir un rapport mensuel par mail. Les administrateurs disposent d'une page « Suivi des exports » avec export CSV. Aucune donnée personnelle n'est enregistrée : seul l'organisme du demandeur est conservé quand il est connu.
+- [Exports] Suivi des téléchargements de données naturalistes par organisme producteur (`[EXPORT_TRACKING]`, désactivé par défaut). Les exports d'observations et de métadonnées de la Synthèse, les exports d'Occtax et d'Occhab, ainsi que les exports du module Export (API publique ou à jeton, fichiers), sont comptés par jour et par jeu de données. Chaque organisme voit les téléchargements de ses données sur `/export_tracking/mes-donnees`, et peut recevoir un rapport mensuel par mail. Les administrateurs disposent d'une page « Suivi des exports » avec export CSV. Aucune donnée personnelle n'est enregistrée : seul l'organisme du demandeur est conservé quand il est connu.
 
 ## 2.17.5 (2026-08-04)
 
