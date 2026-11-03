@@ -1,9 +1,10 @@
 """Enregistrement des téléchargements. Ne fait jamais échouer un export."""
 
 import datetime
+import hashlib
 import logging
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 
 import sqlalchemy as sa
 from flask import current_app, request
@@ -38,8 +39,10 @@ REQUESTER_PUBLIC = "public"  # téléchargement public anonyme
 
 UNKNOWN_DATASET = 0
 
-_token_cache = {}
+# Cache jeton -> demandeur : taille bornée, entrées expirées, clé = hash du jeton
+_token_cache = OrderedDict()
 TOKEN_CACHE_SECONDS = 600
+TOKEN_CACHE_MAX_SIZE = 1000
 
 
 def is_enabled():
@@ -73,6 +76,33 @@ def requester_from_role(id_role):
     return _requester(_organisme_of_role(id_role))
 
 
+def _request_token():
+    token = request.args.get("token") or request.headers.get("api-key")
+    if not token:
+        authorization = request.headers.get("Authorization", "")
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+    return token or None
+
+
+def _cache_get(key):
+    entry = _token_cache.get(key)
+    if entry is None:
+        return None
+    if time.monotonic() - entry[0] >= TOKEN_CACHE_SECONDS:
+        _token_cache.pop(key, None)
+        return None
+    _token_cache.move_to_end(key)
+    return entry[1]
+
+
+def _cache_set(key, value):
+    _token_cache[key] = (time.monotonic(), value)
+    _token_cache.move_to_end(key)
+    while len(_token_cache) > TOKEN_CACHE_MAX_SIZE:
+        _token_cache.popitem(last=False)
+
+
 def requester_from_request(id_export=None):
     """Organisme du demandeur : utilisateur connecté, jeton du module Export, ou public."""
     try:
@@ -80,25 +110,26 @@ def requester_from_request(id_export=None):
             return _requester(getattr(current_user, "id_organisme", None))
     except Exception:
         pass
-    token = request.args.get("token") or request.headers.get("api-key")
+    token = _request_token()
     if token and id_export is not None:
-        key = (id_export, token)
-        cached = _token_cache.get(key)
-        if cached and time.monotonic() - cached[0] < TOKEN_CACHE_SECONDS:
-            return cached[1]
+        key = (id_export, hashlib.sha256(token.encode()).hexdigest())
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
         try:
-            id_role = db.session.execute(
-                sa.text(
-                    "SELECT id_role FROM gn_exports.cor_exports_roles "
-                    "WHERE id_export = :id_export AND token = :token LIMIT 1"
-                ),
-                {"id_export": id_export, "token": token},
-            ).scalar()
+            with db.session.begin_nested():
+                id_role = db.session.execute(
+                    sa.text(
+                        "SELECT id_role FROM gn_exports.cor_exports_roles "
+                        "WHERE id_export = :id_export AND token = :token LIMIT 1"
+                    ),
+                    {"id_export": id_export, "token": token},
+                ).scalar()
+                result = requester_from_role(id_role) if id_role else (REQUESTER_PUBLIC, None)
         except Exception:
-            db.session.rollback()
-            id_role = None
-        result = requester_from_role(id_role) if id_role else (REQUESTER_PUBLIC, None)
-        _token_cache[key] = (time.monotonic(), result)
+            log.warning("Suivi des exports : jeton non résolu", exc_info=True)
+            result = (REQUESTER_PUBLIC, None)
+        _cache_set(key, result)
         return result
     return REQUESTER_PUBLIC, None
 
@@ -107,10 +138,15 @@ def requester_from_request(id_export=None):
 
 
 def count_by_dataset_from_synthese(column, values):
-    """Compte des observations par jeu de données à partir d'id_synthese ou d'unique_id_sinp."""
+    """
+    Compte des observations par jeu de données à partir d'id_synthese ou d'unique_id_sinp.
+    Les valeurs vides ou introuvables sont comptées en « jeu de données inconnu ».
+    """
+    values = list(values)
+    nb_empty = sum(1 for v in values if v is None)
     values = [v for v in values if v is not None]
     if not values:
-        return Counter()
+        return Counter({UNKNOWN_DATASET: nb_empty}) if nb_empty else Counter()
     if column == "id_synthese":
         query = sa.text(
             "SELECT id_dataset, count(*) FROM gn_synthese.synthese "
@@ -132,6 +168,8 @@ def count_by_dataset_from_synthese(column, values):
     found = sum(counts.values())
     if found < len(values):
         counts[UNKNOWN_DATASET] += len(values) - found
+    if nb_empty:
+        counts[UNKNOWN_DATASET] += nb_empty
     return counts
 
 
@@ -169,17 +207,59 @@ def count_by_dataset_from_result(rows):
     return Counter({UNKNOWN_DATASET: len(rows)})
 
 
-def track_module_export(source, rows, export_format):
-    """Raccourci pour les exports des modules (Occtax, Occhab…)."""
+def _guarded_counts(count_function, *args):
+    """
+    Exécute un décompte dans un point de sauvegarde : une erreur SQL (délai dépassé…)
+    annule seulement ce point de sauvegarde et renvoie None, sans toucher à l'export.
+    """
+    try:
+        with db.session.begin_nested():
+            return count_function(*args)
+    except Exception:
+        log.exception("Suivi des exports : décompte impossible")
+        return None
+
+
+def _track(source, count_function, args, export_format=None, requester=None):
+    """Décompte + enregistrement entièrement protégés : ne lève jamais d'exception."""
     if not is_enabled():
         return
     try:
-        counts = count_by_dataset_from_result(rows)
+        counts = _guarded_counts(count_function, *args)
+        if counts is None:
+            return
+        if requester is None:
+            requester = requester_from_request()
+        record_export(source, counts, requester, export_format=export_format)
     except Exception:
-        log.exception("Suivi des exports : décompte impossible")
-        db.session.rollback()
-        return
-    record_export(source, counts, requester_from_request(), export_format=export_format)
+        log.exception("Suivi des exports : enregistrement impossible")
+
+
+def track_module_export(source, rows, export_format):
+    """Exports des modules (Occtax, Occhab…) : lignes SQLAlchemy de la vue d'export."""
+    _track(source, count_by_dataset_from_result, (rows,), export_format)
+
+
+def track_synthese_export(rows, export_format):
+    """Export d'observations de la Synthèse : lignes contenant id_synthese."""
+    _track(
+        SOURCE_SYNTHESE_OBSERVATIONS,
+        lambda rs: count_by_dataset_from_synthese(
+            "id_synthese", [getattr(r, "id_synthese", None) for r in rs]
+        ),
+        (rows,),
+        export_format,
+    )
+
+
+def track_metadata_export(dataset_ids):
+    """Export des métadonnées de la Synthèse : fiches de jeux de données, sans observations."""
+    _track(
+        SOURCE_SYNTHESE_METADATA,
+        lambda ids: dict.fromkeys((int(i) for i in ids if i), 0),
+        (dataset_ids,),
+        "csv",
+    )
 
 
 # --- Enregistrement ------------------------------------------------------------------
@@ -193,11 +273,13 @@ def record_export(
     id_export=None,
     export_label=None,
     day=None,
+    commit=True,
 ):
     """
     Ajoute un téléchargement aux compteurs du jour, dans un point de sauvegarde
     de la session : une erreur est journalisée, annule seulement ce point de
-    sauvegarde, et n'interrompt jamais l'export en cours.
+    sauvegarde, et n'interrompt jamais l'export en cours. La transaction est
+    ensuite validée (commit=False : laissée à l'appelant).
     """
     if not is_enabled():
         return
@@ -217,6 +299,8 @@ def record_export(
     tracking_table = TExportTracking.__table__
     dataset_table = CorExportTrackingDataset.__table__
     try:
+        # Une erreur ici annule seulement ce point de sauvegarde, pas la transaction
+        # de la requête en cours.
         with db.session.begin_nested():
             stmt = (
                 insert(tracking_table)
@@ -245,17 +329,23 @@ def record_export(
                         id_tracking=id_tracking,
                         id_dataset=int(id_dataset or UNKNOWN_DATASET),
                         nb_observations=int(nb),
+                        nb_requests=1,
                     )
                     .on_conflict_do_update(
                         index_elements=["id_tracking", "id_dataset"],
-                        set_={"nb_observations": dataset_table.c.nb_observations + int(nb)},
+                        set_={
+                            "nb_observations": dataset_table.c.nb_observations + int(nb),
+                            "nb_requests": dataset_table.c.nb_requests + 1,
+                        },
                     )
                 )
                 db.session.execute(stmt)
-        db.session.commit()
     except Exception:
         log.exception("Suivi des exports : enregistrement impossible")
+        return
+    if commit:
         try:
-            db.session.rollback()
+            db.session.commit()
         except Exception:
-            pass
+            log.exception("Suivi des exports : validation impossible")
+            db.session.rollback()

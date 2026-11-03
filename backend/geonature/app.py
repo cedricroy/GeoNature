@@ -274,4 +274,6 @@ def create_app(with_external_mods=True):
                     url_prefix = current_app.config[module_code]["MODULE_API"]
                     app.register_blueprint(module_blueprint, url_prefix=url_prefix)
 
+        export_tracking_hooks.check_export_module(app)
+
     return app

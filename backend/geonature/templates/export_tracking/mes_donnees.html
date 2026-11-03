@@ -14,7 +14,12 @@
   <p><a href="{{ url_application }}"><i class="fa fa-arrow-left"></i> Retour à GeoNature</a></p>
   <h2>Téléchargements de vos données naturalistes</h2>
 
-  {% if not organisme %}
+  {% if excluded %}
+    <div class="alert alert-info">
+      Votre organisme est partagé par plusieurs personnes sans lien entre elles : le suivi des
+      téléchargements n'est pas proposé pour lui. Contactez l'administrateur de la plateforme.
+    </div>
+  {% elif not organisme %}
     <div class="alert alert-warning">
       Votre compte n'est rattaché à aucun organisme : ce suivi concerne les données des organismes.
       Contactez l'administrateur de la plateforme.

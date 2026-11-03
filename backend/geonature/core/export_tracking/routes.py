@@ -36,6 +36,9 @@ def _my_rows():
     id_organisme = _current_organisme()
     start, end = parse_period(request.args)
     rows = []
+    if id_organisme in reports.excluded_organismes():
+        # Organisme partagé par des personnes sans lien (« Particulier »…) : pas de suivi
+        id_organisme = None
     if id_organisme:
         rows = reports.report_rows(
             start,
@@ -51,10 +54,12 @@ def my_data():
     """Téléchargements des données dont l'organisme de l'utilisateur est producteur."""
     id_organisme, start, end, rows = _my_rows()
     organisme = reports.organismes([id_organisme])[0] if id_organisme else None
+    excluded = getattr(current_user, "id_organisme", None) in reports.excluded_organismes()
     summary = reports.summary_by_producer(rows)
     return render_template(
         "export_tracking/mes_donnees.html",
         organisme=organisme,
+        excluded=excluded,
         start=start,
         end=end,
         rows=rows,

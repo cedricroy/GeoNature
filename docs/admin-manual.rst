@@ -2555,6 +2555,15 @@ Aucune donnée personnelle n'est conservée : ni utilisateur, ni adresse IP.
 * si ``MONTHLY_REPORT_ENABLED = true``, chaque organisme producteur reçoit le 1er du mois un récapitulatif
   du mois précédent, à son adresse mail renseignée dans UsersHub. Les adresses ``REPORT_CC`` sont en copie.
 
+**Organismes partagés** : un organisme UsersHub utilisé par des personnes sans lien entre elles
+(« Particulier », « Autre »…) peut être exclu avec ``EXCLUDED_ORGANISMS = [<id_organisme>, …]``. Ses
+membres ne voient pas le suivi, et aucun rapport ne lui est envoyé. Les administrateurs voient toujours tout.
+
+**Comptage** : chaque appel à l'API du module Export compte comme un téléchargement, y compris chaque page
+d'un parcours paginé. Pour un fichier du module Export, le décompte par jeu de données est fait sur la vue
+entière, comme le fichier généré. Les fiches de métadonnées exportées apparaissent dans le détail, mais pas dans
+les totaux d'observations.
+
 **Activation** : dans ``geonature_config.toml`` :
 
 .. code-block:: toml

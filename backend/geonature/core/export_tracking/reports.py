@@ -8,7 +8,12 @@ from flask import current_app
 
 from geonature.utils.env import db
 
-from .tracking import REQUESTER_INCONNU, REQUESTER_PUBLIC, SOURCE_LABELS
+from .tracking import (
+    REQUESTER_INCONNU,
+    REQUESTER_PUBLIC,
+    SOURCE_LABELS,
+    SOURCE_SYNTHESE_METADATA,
+)
 
 # Rôles d'acteur (nomenclature ROLE_ACTEUR) les plus courants, pour l'affichage.
 ACTOR_ROLE_LABELS = {
@@ -44,7 +49,10 @@ af_producers AS (
     LEFT JOIN utilisateurs.t_roles r ON r.id_role = caa.id_role
     WHERE :use_af
       AND caa.id_nomenclature_actor_role IN (SELECT id_nomenclature FROM roles)
-      AND NOT EXISTS (SELECT 1 FROM dataset_producers dp WHERE dp.id_dataset = d.id_dataset)
+      AND NOT EXISTS (
+          SELECT 1 FROM dataset_producers dp
+          WHERE dp.id_dataset = d.id_dataset AND dp.id_organisme IS NOT NULL
+      )
 ),
 producers AS (
     SELECT DISTINCT id_dataset, id_organisme FROM dataset_producers WHERE id_organisme IS NOT NULL
@@ -56,9 +64,9 @@ producers AS (
 _REPORT_QUERY = (
     _PRODUCERS_CTE
     + """
-SELECT t.day, t.source, t.id_export, t.export_label, t.export_format,
+SELECT t.id_tracking, t.day, t.source, t.id_export, t.export_label, t.export_format,
        t.requester_type, t.requester_id_organisme, ro.nom_organisme AS requester_name,
-       t.nb_requests, c.id_dataset, d.dataset_name,
+       c.nb_requests, c.id_dataset, d.dataset_name,
        p.id_organisme AS producer_id, po.nom_organisme AS producer_name,
        c.nb_observations
 FROM gn_commons.t_export_tracking t
@@ -160,28 +168,67 @@ def report_rows(start, end, producer=None, requester=None, source=None, show_req
     return rows
 
 
+def merge_producers(rows):
+    """
+    Une ligne par téléchargement et jeu de données, avec les producteurs réunis.
+    (La requête renvoie une ligne par producteur : sans regroupement, un jeu de
+    données à plusieurs producteurs serait compté plusieurs fois dans le détail.)
+    """
+    merged = OrderedDict()
+    for r in rows:
+        key = (r["id_tracking"], r["id_dataset"])
+        if key not in merged:
+            merged[key] = dict(r, producer_ids=[], producers=[])
+        m = merged[key]
+        if r["producer_id"] and r["producer_id"] not in m["producer_ids"]:
+            m["producer_ids"].append(r["producer_id"])
+            m["producers"].append(r["producer"])
+    for m in merged.values():
+        m["producer"] = ", ".join(m["producers"]) or "Producteur non renseigné"
+    return list(merged.values())
+
+
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value):
+    """Neutralise les formules (=, +, -, @…) dans les cellules CSV ouvertes dans un tableur."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 def csv_rows(rows):
     return [
         {
-            "date": r["day"].isoformat(),
-            "organisme_producteur": r["producer"],
-            "jeu_de_donnees": r["dataset"],
-            "id_dataset": r["id_dataset"] or "",
-            "source": SOURCE_LABELS.get(r["source"], r["source"]),
-            "export": r["export_label"] or "",
-            "format": r["export_format"] or "",
-            "telecharge_par": r["requester"],
-            "nb_telechargements": r["nb_requests"],
-            "nb_observations": r["nb_observations"],
+            key: csv_safe(value)
+            for key, value in {
+                "date": r["day"].isoformat(),
+                "organisme_producteur": r["producer"],
+                "jeu_de_donnees": r["dataset"],
+                "id_dataset": r["id_dataset"] or "",
+                "source": SOURCE_LABELS.get(r["source"], r["source"]),
+                "export": r["export_label"] or "",
+                "format": r["export_format"] or "",
+                "telecharge_par": r["requester"],
+                "nb_telechargements": r["nb_requests"],
+                "nb_observations": r["nb_observations"],
+            }.items()
         }
         for r in rows
     ]
+
+
+def excluded_organismes():
+    return {int(i) for i in tracking_config()["EXCLUDED_ORGANISMS"]}
 
 
 def summary_by_producer(rows):
     """Totaux par organisme producteur : observations téléchargées, et par demandeur."""
     summary = OrderedDict()
     for r in rows:
+        if r["source"] == SOURCE_SYNTHESE_METADATA:
+            continue  # fiches de métadonnées : pas d'observations, pas dans les totaux
         key = r["producer_id"] or 0
         s = summary.setdefault(
             key,

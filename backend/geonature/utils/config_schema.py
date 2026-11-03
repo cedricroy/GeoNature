@@ -143,6 +143,9 @@ class ExportTrackingConfig(Schema):
     MONTHLY_REPORT_CRONTAB = fields.String(load_default="23 6 1 * *")
     # Adresses en copie de chaque rapport mensuel (administrateurs de la plateforme)
     REPORT_CC = fields.List(fields.Email(), load_default=[])
+    # Organismes partagés par des personnes sans lien entre elles (« Particulier »,
+    # « Autre »…) : leurs membres ne voient pas le suivi et aucun rapport ne leur est envoyé.
+    EXCLUDED_ORGANISMS = fields.List(fields.Integer(), load_default=[])
 
 
 class AdditionalFields(Schema):

@@ -47,6 +47,7 @@ def upgrade():
         # 0 = jeu de données inconnu ; pas de clé étrangère pour garder l'historique
         sa.Column("id_dataset", sa.Integer, primary_key=True),
         sa.Column("nb_observations", sa.BigInteger, nullable=False, server_default="0"),
+        sa.Column("nb_requests", sa.Integer, nullable=False, server_default="0"),
         schema="gn_commons",
     )
     op.create_index(

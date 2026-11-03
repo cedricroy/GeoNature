@@ -21,7 +21,7 @@
       <td style="{{ style_td }}">{{ r.export }}{% if r.nb_requests > 1 %} <small>({{ r.nb_requests }} fois)</small>{% endif %}</td>
       <td style="{{ style_td }}">{{ r.export_format or '' }}</td>
       <td style="{{ style_td }}">{{ r.requester }}</td>
-      <td style="{{ style_td }} text-align: right;" class="text-right">{{ '{:,}'.format(r.nb_observations).replace(',', ' ') }}</td>
+      <td style="{{ style_td }} text-align: right;" class="text-right">{% if r.source == 'synthese_metadata' %}<small>fiche de métadonnées</small>{% else %}{{ '{:,}'.format(r.nb_observations).replace(',', ' ') }}{% endif %}</td>
     </tr>
   {% else %}
     <tr><td colspan="{{ 7 if show_producer else 6 }}" style="{{ style_td }}" class="text-muted">Aucun téléchargement sur la période.</td></tr>

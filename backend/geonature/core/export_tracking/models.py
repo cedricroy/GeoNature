@@ -38,3 +38,5 @@ class CorExportTrackingDataset(db.Model):
     # Pas de clé étrangère : l'historique est conservé si le jeu de données est supprimé.
     id_dataset = db.Column(db.Integer, primary_key=True)
     nb_observations = db.Column(db.BigInteger, nullable=False, default=0)
+    # Nombre de téléchargements ayant contenu ce jeu de données
+    nb_requests = db.Column(db.Integer, nullable=False, default=0)

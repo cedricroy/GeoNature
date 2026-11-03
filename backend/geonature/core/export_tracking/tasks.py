@@ -37,17 +37,21 @@ def build_reports(start, end):
     cfg = current_app.config["EXPORT_TRACKING"]
     rows = reports.report_rows(start, end, show_requester=cfg["SHOW_REQUESTER_ORGANISM"])
     by_producer = {}
+    excluded = reports.excluded_organismes()
     for row in rows:
-        if row["producer_id"]:
+        if row["producer_id"] and row["producer_id"] not in excluded:
             by_producer.setdefault(row["producer_id"], []).append(row)
     result = []
     for organisme in reports.organismes(by_producer.keys()):
         producer_rows = by_producer[organisme["id_organisme"]]
+        summary = reports.summary_by_producer(producer_rows)
+        if not summary:  # uniquement des fiches de métadonnées
+            continue
         result.append(
             {
                 "organisme": organisme,
                 "rows": producer_rows,
-                "total": reports.summary_by_producer(producer_rows)[0],
+                "total": summary[0],
             }
         )
     return result

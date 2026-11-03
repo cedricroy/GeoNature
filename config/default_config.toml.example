@@ -618,6 +618,8 @@ MEDIA_CLEAN_CRONTAB = "0 1 * * *"
     MONTHLY_REPORT_ENABLED = false
     MONTHLY_REPORT_CRONTAB = "23 6 1 * *"
     REPORT_CC = []
+    # id_organisme des organismes partagés (« Particulier », « Autre »…) : pas de suivi pour leurs membres
+    EXCLUDED_ORGANISMS = []
 
 
 # Champs additionnels

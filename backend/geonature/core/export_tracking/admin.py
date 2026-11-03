@@ -50,7 +50,7 @@ class ExportTrackingAdminView(CruvedProtectedMixin, BaseView):
         return self.render(
             "admin/export_tracking.html",
             filters=filters,
-            rows=rows,
+            rows=reports.merge_producers(rows),
             summary=reports.summary_by_producer(rows),
             unattributed=reports.unattributed_exports(filters["start"], filters["end"]),
             organismes=reports.organismes(),
@@ -62,7 +62,7 @@ class ExportTrackingAdminView(CruvedProtectedMixin, BaseView):
     @expose("/export.csv")
     def csv(self):
         filters = self._filters()
-        rows = reports.report_rows(**filters)
+        rows = reports.merge_producers(reports.report_rows(**filters))
         return to_csv_resp(
             f"suivi_exports_{filters['start'].isoformat()}_{filters['end'].isoformat()}",
             data=reports.csv_rows(rows),

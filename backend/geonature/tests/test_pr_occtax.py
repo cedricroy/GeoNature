@@ -814,9 +814,9 @@ class TestOcctaxGetReleveFilter:
             )
         ).all()
         assert sum(row.nb_observations for row in tracked) == nb_rows
-        assert {row.source for row in tracked} == {"occtax"}
-        assert {row.requester_id_organisme for row in tracked} == {users["user"].id_organisme}
         if nb_rows:
+            assert {row.source for row in tracked} == {"occtax"}
+            assert {row.requester_id_organisme for row in tracked} == {users["user"].id_organisme}
             assert {row.id_dataset for row in tracked} == {id_dataset}
 
     def test_export_occtax_no_additional(
