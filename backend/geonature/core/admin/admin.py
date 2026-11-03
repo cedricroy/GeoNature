@@ -31,6 +31,7 @@ from pypnnomenclature.admin import (
 )
 
 from .utils import CruvedProtectedMixin
+from .update.views import UpdateAdminView
 
 
 class MyHomeView(AdminIndexView):
@@ -151,6 +152,16 @@ admin.add_view(
         db.session,
         name="Modules",
         category="Autres",
+    )
+)
+
+admin.add_view(
+    UpdateAdminView(
+        name="Mises à jour",
+        category="Autres",
+        endpoint="update",
+        menu_icon_type="fa",
+        menu_icon_value="fa-refresh",
     )
 )
 

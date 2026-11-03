@@ -1,0 +1,10 @@
+# Règles sudo de l'outil de mise à jour de GeoNature (/admin/update).
+# Installées par install/02_configure_systemd.sh si install_updater=true.
+#
+# Ces règles suffisent pour la mise à jour des modules, de la base, du frontend et
+# des référentiels. La mise à jour de GeoNature lui-même passe par
+# install/migration/migration.sh, qui modifie /etc (systemd, Apache) : elle demande
+# un sudo sans mot de passe complet pour l'utilisateur ${USER}.
+${USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block geonature-update.service
+${USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop geonature, /usr/bin/systemctl start geonature, /usr/bin/systemctl restart geonature
+${USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop geonature-worker, /usr/bin/systemctl start geonature-worker, /usr/bin/systemctl restart geonature-worker

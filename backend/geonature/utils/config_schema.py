@@ -125,6 +125,20 @@ class AlembicConfig(Schema):
     VERSION_LOCATIONS = fields.String()
 
 
+class UpdaterConfig(Schema):
+    """
+    Outil de mise à jour depuis l'interface d'administration (/admin/update).
+    Désactivé par défaut : voir la documentation avant de l'activer.
+    """
+
+    ENABLED = fields.Boolean(load_default=False)
+    GITHUB_REPO = fields.String(load_default="PnX-SI/GeoNature")
+    BACKUP_DB = fields.Boolean(load_default=True)
+    STATE_DIR = fields.String(load_default="/var/lib/geonature/update")
+    LOG_DIR = fields.String(load_default="/var/log/geonature/update")
+    SERVICE_NAME = fields.String(load_default="geonature-update.service")
+
+
 class AdditionalFields(Schema):
     IMPLEMENTED_MODULES = fields.List(fields.String(), load_default=["OCCTAX", "METADATA"])
     IMPLEMENTED_OBJECTS = fields.List(
@@ -236,6 +250,7 @@ class GnPySchemaConf(Schema):
     SERVER = fields.Nested(ServerConfig, load_default=ServerConfig().load({}))
     MEDIAS = fields.Nested(MediasConfig, load_default=MediasConfig().load({}))
     ALEMBIC = fields.Nested(AlembicConfig, load_default=AlembicConfig().load({}))
+    UPDATER = fields.Nested(UpdaterConfig, load_default=UpdaterConfig().load({}))
     AUTHENTICATION = fields.Nested(
         AuthenticationConfig, load_default=AuthenticationConfig().load({}), unknown=INCLUDE
     )

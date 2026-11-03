@@ -603,6 +603,20 @@ MEDIA_CLEAN_CRONTAB = "0 1 * * *"
     MEDIAS_SIZE_MAX = 10000
 
 
+# Outil de mise à jour depuis l'interface d'administration (Admin > Autres > Mises à jour)
+# Voir la documentation avant de l'activer (service systemd et droits sudo requis).
+[UPDATER]
+    ENABLED = false
+    # Dépôt GitHub d'où sont téléchargées les nouvelles versions de GeoNature
+    GITHUB_REPO = "PnX-SI/GeoNature"
+    # Sauvegarde de la base (pg_dump) avant chaque mise à jour
+    BACKUP_DB = true
+    # Dossiers de l'état et des journaux (en dehors du dossier d'installation)
+    STATE_DIR = "/var/lib/geonature/update"
+    LOG_DIR = "/var/log/geonature/update"
+    SERVICE_NAME = "geonature-update.service"
+
+
 # Champs additionnels
 [ADDITIONAL_FIELDS]
     IMPLEMENTED_MODULES = ["OCCTAX", "METADATA"]

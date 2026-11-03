@@ -1,0 +1,18 @@
+[Unit]
+Description=GeoNature - mise à jour lancée depuis l'interface d'administration
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=${USER}
+Group=${USER}
+WorkingDirectory=${BASE_DIR}/
+# Fichier écrit par la tâche Celery geonature.core.admin.update.tasks.launch_update.
+# Si vous modifiez UPDATER.STATE_DIR dans geonature_config.toml, adaptez ce chemin.
+EnvironmentFile=/var/lib/geonature/update/request.env
+EnvironmentFile=-${BASE_DIR}/environ
+ExecStart=${BASE_DIR}/install/update/geonature-update.sh --from-request
+TimeoutStartSec=infinity
+# La mise à jour arrête geonature et geonature-worker : elle ne doit pas
+# appartenir à leur cgroup, d'où ce service séparé.
+KillMode=process

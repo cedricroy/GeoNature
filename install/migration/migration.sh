@@ -41,7 +41,12 @@ echo "Nouveau dossier GeoNature : ${newdir} ($(cat "${newdir}/VERSION"))"
 echo "Ancien dossier GeoNature : ${olddir} ($(cat "${olddir}/VERSION"))"
 
 
-read -p "Appuyer sur une touche pour quitter. Appuyer sur Y ou y pour continuer. " choice
+# GN_MIGRATION_NONINTERACTIVE=1 : pas de confirmation (utilisé par install/update/geonature-update.sh)
+if [ "${GN_MIGRATION_NONINTERACTIVE:-0}" = "1" ]; then
+    choice=y
+else
+    read -p "Appuyer sur une touche pour quitter. Appuyer sur Y ou y pour continuer. " choice
+fi
 if [ "$choice" != 'y' ] && [ "$choice" != 'Y' ]; then
     echo "Arrêt de la migration."
     exit

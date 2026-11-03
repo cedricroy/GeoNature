@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2.18.0 (unreleased)
+
+### 🚀 Nouveautés
+
+- [Admin] Nouvelle page « Mises à jour » dans l'administration. Elle met à jour en un clic GeoNature, les modules externes, le schéma de la base et le frontend, et lance des traitements sur les référentiels (cache de sensibilité, profils). Elle est désactivée par défaut : voir la section « Mise à jour depuis l'interface d'administration » de la documentation (`[UPDATER]`, `install_updater` dans `settings.ini`).
+- [Installation] Nouveau script `install/update/geonature-update.sh`, utilisable aussi en ligne de commande (option `--dry-run`).
+- [Installation] `migration.sh` accepte `GN_MIGRATION_NONINTERACTIVE=1` pour sauter la confirmation.
+
 ## 2.17.5 (2026-08-04)
 
 ### 🐛 Corrections

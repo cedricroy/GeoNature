@@ -77,3 +77,10 @@ install_ref_sensitivity=true
 install_module_validation=true
 # Installer le module Occurrence d'habitat
 install_module_occhab=true
+
+#### Outil de mise à jour depuis l'interface d'administration ####
+
+# Installer les droits sudo (/etc/sudoers.d/geonature-update) nécessaires au bouton
+# « Mises à jour » de l'admin. Il faut aussi activer [UPDATER] ENABLED = true
+# dans geonature_config.toml. Voir la documentation avant d'activer.
+install_updater=false

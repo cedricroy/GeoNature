@@ -25,7 +25,20 @@ envsubst '${BASE_DIR}' < "${BASE_DIR}/install/assets/geonature-reload@.path" | s
 sudo mkdir -p /etc/systemd/system-generators/
 envsubst '${BASE_DIR}' < "${BASE_DIR}/install/assets/geonature-generator" | sudo tee /etc/systemd/system-generators/geonature-generator
 sudo chmod +x /etc/systemd/system-generators/geonature-generator
+envsubst '${USER} ${BASE_DIR}' < "${BASE_DIR}/install/assets/geonature-update.service" | sudo tee /etc/systemd/system/geonature-update.service
 sudo systemctl daemon-reload
+
+if [[ "${install_updater:-false}" = true ]]; then
+    echo "Installation des droits sudo de l'outil de mise à jour…"
+    tmp_sudoers="$(mktemp)"
+    envsubst '${USER}' < "${BASE_DIR}/install/assets/sudoers-geonature-update" > "${tmp_sudoers}"
+    if sudo visudo -cf "${tmp_sudoers}"; then
+        sudo install -m 0440 -o root -g root "${tmp_sudoers}" /etc/sudoers.d/geonature-update
+    else
+        echo "Règles sudo invalides, non installées." >&2
+    fi
+    rm -f "${tmp_sudoers}"
+fi
 
 echo "Installation de la configuration logrotate…"
 envsubst '${USER}' < "${BASE_DIR}/install/assets/log_rotate" | sudo tee /etc/logrotate.d/geonature

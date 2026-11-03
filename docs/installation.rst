@@ -321,3 +321,80 @@ Dans ce cas, les commandes à exécuter sont :
     git checkout X.Y.Z # où X.Y.Z est le numéro du tag de la version vers laquelle faire la mise à jour, ou le nom de la branche à utiliser
     git submodule update # ou "git config submodule.recurse true" lancé une seule fois, pour que la mise à jour des sous-modules soit relancée automatiquement à chaque "git pull"
     ./install/migration/migration.sh .
+
+
+.. _update-from-admin:
+
+Mise à jour depuis l'interface d'administration
+-----------------------------------------------
+
+La page « Admin > Autres > Mises à jour » permet de lancer en un clic :
+
+* la mise à jour de GeoNature vers la dernière version publiée sur GitHub ;
+* la mise à jour d'un module externe vers un tag, une branche ou un commit ;
+* la mise à jour du schéma de la base et des données de référence déjà installées
+  (``geonature db autoupgrade`` et ``geonature upgrade-modules-db``) ;
+* la régénération de la configuration et le rebuild du frontend (``geonature update-configuration``) ;
+* des traitements sur les référentiels : cache des règles de sensibilité, sensibilité de la synthèse,
+  profils de taxons.
+
+La page affiche le journal de l'opération en direct. Les journaux sont conservés dans
+``/var/log/geonature/update/`` et l'état de la dernière opération dans ``/var/lib/geonature/update/status.json``.
+
+**Fonctionnement.** Le bouton envoie une tâche Celery qui valide la demande, l'écrit dans
+``/var/lib/geonature/update/request.env`` et démarre le service systemd ``geonature-update.service``.
+C'est ce service qui exécute ``install/update/geonature-update.sh``. Le worker Celery ne fait pas la mise à
+jour lui-même, car il est arrêté pendant celle-ci. Le script peut aussi être lancé à la main :
+
+.. code-block:: bash
+
+    ./install/update/geonature-update.sh --dry-run core X.Y.Z   # affiche les commandes sans les exécuter
+    ./install/update/geonature-update.sh core X.Y.Z
+    ./install/update/geonature-update.sh module MONITORINGS 1.2.3
+    ./install/update/geonature-update.sh db
+    ./install/update/geonature-update.sh frontend
+    ./install/update/geonature-update.sh ref sensitivity-cache
+
+**Activation.**
+
+1. Dans ``config/settings.ini``, passez ``install_updater=true``, puis relancez
+   ``./install/02_configure_systemd.sh``. Ce script installe ``geonature-update.service`` et les droits sudo
+   limités de ``/etc/sudoers.d/geonature-update`` : démarrage du service de mise à jour, arrêt et démarrage de
+   ``geonature`` et ``geonature-worker``.
+2. Dans ``config/geonature_config.toml``, ajoutez :
+
+   .. code-block:: toml
+
+       [UPDATER]
+           ENABLED = true
+
+3. Rechargez GeoNature : ``sudo systemctl restart geonature geonature-worker``.
+
+Seuls les utilisateurs qui ont le droit « R » de portée 3 sur le module ``ADMIN`` voient la page. Il faut le
+droit « U » de portée 3 pour lancer une opération.
+
+**Mise à jour de GeoNature.** Le script de migration modifie ``/etc`` (systemd, Apache). La mise à jour de
+GeoNature lui-même demande donc que l'utilisateur linux de GeoNature ait un sudo **sans mot de passe complet**.
+Sans lui, l'opération s'arrête avec un message explicite, et les autres actions restent disponibles. Le script
+se déroule ainsi :
+
+* sauvegarde de la base avec ``pg_dump`` dans ``/var/lib/geonature/update/backups/``, sauf si
+  ``UPDATER.BACKUP_DB = false`` ;
+* installation faite depuis une archive : téléchargement de la nouvelle version, renommage de l'ancien dossier
+  en ``geonature_old_<version>_<date>``, puis lancement de ``migration.sh`` ;
+* installation faite avec git : ``git fetch``, ``git checkout <tag>``, ``git submodule update`` puis
+  ``migration.sh .`` ;
+* en cas d'échec, l'ancienne version des fichiers est restaurée et les services sont redémarrés. **La base de
+  données n'est pas restaurée automatiquement.** Si elle a déjà été migrée, restaurez la sauvegarde indiquée
+  dans le journal avec ``pg_restore --clean --if-exists -d <base> <fichier.dump>``.
+
+Lisez toujours les notes de version avant de cliquer : certaines versions demandent des actions manuelles,
+que le bouton ne fait pas à votre place.
+
+**Mise à jour d'un module.** Le dossier du module doit être un clone git, ou le module doit déclarer son dépôt
+GitHub dans ses métadonnées. Les modules fournis avec GeoNature (dossier ``contrib/``) se mettent à jour avec
+GeoNature. Un clone git qui contient des modifications locales non commitées est refusé.
+
+**Limites.** La migration vers une nouvelle version de Taxref n'est pas proposée, car elle demande une analyse
+manuelle des conflits : suivez la documentation de TaxHub. Si vous changez ``UPDATER.STATE_DIR``, adaptez aussi
+``EnvironmentFile`` dans ``/etc/systemd/system/geonature-update.service``.

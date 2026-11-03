@@ -1,0 +1,191 @@
+{% extends 'admin/master.html' %}
+
+{% macro action_form(action, label, target=None, confirm=None, btn="btn-primary", disabled=False) %}
+<form method="post" action="{{ url_for('.run') }}" class="d-inline update-form"
+      {% if confirm %}data-confirm="{{ confirm }}"{% endif %}>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="action" value="{{ action }}">
+  {% if target is not none %}<input type="hidden" name="target" value="{{ target }}">{% endif %}
+  <button type="submit" class="btn btn-sm {{ btn }} update-btn"
+          {% if disabled or not can_update %}disabled{% endif %}>{{ label }}</button>
+</form>
+{% endmacro %}
+
+{% block body %}
+{% set busy = status.state in ('queued', 'running') %}
+
+{% if not can_update %}
+<div class="alert alert-warning">
+  Vous pouvez consulter cette page, mais il faut le droit « U » de portée 3 sur le module
+  ADMIN pour lancer une mise à jour.
+</div>
+{% endif %}
+
+<div class="alert alert-info">
+  Chaque action est exécutée sur le serveur par le service <code>geonature-update.service</code>.
+  Pendant une mise à jour de GeoNature ou d'un module, l'application est indisponible
+  quelques minutes. Les journaux sont conservés dans <code>{{ config.UPDATER.LOG_DIR }}</code>.
+</div>
+
+<!-- GeoNature -->
+<div class="card mb-3">
+  <div class="card-header"><i class="fa fa-cube"></i> GeoNature</div>
+  <div class="card-body">
+    <p class="mb-1">Version installée : <strong>{{ current_version }}</strong></p>
+    {% if release %}
+      <p class="mb-2">
+        Dernière version publiée : <strong>{{ release.version }}</strong>
+        {% if release.url %}(<a href="{{ release.url }}" target="_blank" rel="noopener">notes de version</a>){% endif %}
+      </p>
+      {% if core_update_available %}
+        <div class="alert alert-warning py-2">
+          Lisez les notes de version avant de mettre à jour : certaines versions demandent des
+          actions manuelles. {% if config.UPDATER.BACKUP_DB %}La base de données sera sauvegardée
+          avant la mise à jour.{% else %}<strong>Aucune sauvegarde automatique de la base</strong>
+          (UPDATER.BACKUP_DB = false).{% endif %}
+        </div>
+        {{ action_form('core', 'Mettre à jour vers ' ~ release.version, target=release.version,
+                       confirm='Mettre à jour GeoNature de ' ~ current_version ~ ' vers ' ~ release.version ~ ' ? L’application sera indisponible pendant la mise à jour.',
+                       btn='btn-danger', disabled=busy) }}
+      {% else %}
+        <span class="badge badge-success">À jour</span>
+      {% endif %}
+    {% else %}
+      <p class="text-muted">Impossible de récupérer la dernière version sur GitHub
+        ({{ config.UPDATER.GITHUB_REPO }}).</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Modules -->
+<div class="card mb-3">
+  <div class="card-header"><i class="fa fa-puzzle-piece"></i> Modules</div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr><th>Code</th><th>Paquet</th><th>Version</th><th>Mise à jour</th></tr>
+      </thead>
+      <tbody>
+      {% for module in modules %}
+        <tr>
+          <td>{{ module.code }}</td>
+          <td>{{ module.name }}</td>
+          <td>{{ module.version }}</td>
+          <td>
+          {% if module.bundled %}
+            <span class="text-muted">Fourni avec GeoNature</span>
+          {% elif not module.updatable %}
+            <span class="text-muted">Dossier source introuvable (ni clone git, ni dépôt GitHub connu)</span>
+          {% else %}
+            <form method="post" action="{{ url_for('.run') }}" class="form-inline update-form"
+                  data-confirm="Mettre à jour le module {{ module.code }} ? L’application sera indisponible pendant la mise à jour.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="action" value="module">
+              <input type="hidden" name="module_code" value="{{ module.code }}">
+              <input type="text" name="target" class="form-control form-control-sm mr-2"
+                     placeholder="{% if module.git %}tag, branche ou commit{% else %}tag (ex. 1.2.3){% endif %}"
+                     pattern="[A-Za-z0-9][A-Za-z0-9._/\-]{0,99}" required>
+              <button type="submit" class="btn btn-sm btn-primary update-btn"
+                      {% if busy or not can_update %}disabled{% endif %}>Mettre à jour</button>
+            </form>
+          {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="text-muted">Aucun module installé.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Base, frontend, référentiels -->
+<div class="card mb-3">
+  <div class="card-header"><i class="fa fa-wrench"></i> Maintenance</div>
+  <div class="card-body">
+    <p class="mb-1"><strong>Schéma et données de référence de la base</strong> : applique les
+      migrations Alembic en attente de GeoNature, des modules et des données de référence déjà
+      installées (nomenclatures, ref_geo, taxonomie…) avec <code>geonature db autoupgrade</code>
+      et <code>geonature upgrade-modules-db</code>.</p>
+    <p>{{ action_form('db', 'Mettre à jour la base', confirm='Appliquer les migrations de base de données en attente ?', disabled=busy) }}</p>
+
+    <p class="mb-1"><strong>Frontend</strong> : régénère la configuration et rebuild le frontend
+      (<code>geonature update-configuration</code>). À lancer après une modification de la configuration.</p>
+    <p>{{ action_form('frontend', 'Rebuild du frontend', disabled=busy) }}</p>
+
+    <p class="mb-1"><strong>Référentiels</strong></p>
+    <ul class="list-unstyled">
+    {% for key, label in ref_targets.items() %}
+      <li class="mb-1">{{ action_form('ref', 'Lancer', target=key, btn='btn-outline-primary', disabled=busy) }} {{ label }}</li>
+    {% endfor %}
+    </ul>
+    <p class="text-muted small mb-0">La migration vers une nouvelle version de Taxref n'est pas
+      proposée ici : elle demande d'analyser les conflits à la main. Suivez la documentation
+      de TaxHub.</p>
+  </div>
+</div>
+
+<!-- Journal -->
+<div class="card mb-5">
+  <div class="card-header">
+    <i class="fa fa-terminal"></i> Journal
+    <span id="update-state" class="badge ml-2"></span>
+  </div>
+  <div class="card-body">
+    <p id="update-message" class="mb-2"></p>
+    <pre id="update-log" style="max-height: 400px; overflow-y: auto; background: #222; color: #eee; padding: 8px;"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  var STATUS_URL = "{{ url_for('.status') }}";
+  var BADGES = {
+    idle: ["badge-secondary", "Aucune action"],
+    queued: ["badge-info", "En attente"],
+    running: ["badge-warning", "En cours"],
+    success: ["badge-success", "Terminée"],
+    failed: ["badge-danger", "Échec"]
+  };
+  document.querySelectorAll(".update-form[data-confirm]").forEach(function (form) {
+    form.addEventListener("submit", function (e) {
+      if (!window.confirm(form.dataset.confirm)) { e.preventDefault(); }
+    });
+  });
+  function setBusy(busy) {
+    document.querySelectorAll(".update-btn").forEach(function (b) {
+      if (busy) { b.disabled = true; } else if (!b.dataset.locked) { b.disabled = {{ 'false' if can_update else 'true' }}; }
+    });
+  }
+  function render(data) {
+    var st = data.status || {state: "idle"};
+    var badge = BADGES[st.state] || ["badge-secondary", st.state];
+    var el = document.getElementById("update-state");
+    el.className = "badge ml-2 " + badge[0];
+    el.textContent = badge[1] + (st.action ? " – " + st.action + (st.target ? " " + st.target : "") : "");
+    document.getElementById("update-message").textContent = st.message || "";
+    var log = document.getElementById("update-log");
+    var atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 5;
+    log.textContent = (data.log || []).join("\n");
+    if (atBottom) { log.scrollTop = log.scrollHeight; }
+    setBusy(st.state === "queued" || st.state === "running");
+    return st.state;
+  }
+  function poll() {
+    fetch(STATUS_URL, {credentials: "same-origin"})
+      .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
+      .then(function (data) {
+        var state = render(data);
+        setTimeout(poll, (state === "queued" || state === "running") ? 3000 : 15000);
+      })
+      .catch(function () {
+        // L'API est indisponible pendant le redémarrage des services : on réessaie.
+        document.getElementById("update-message").textContent =
+          "Serveur momentanément indisponible (redémarrage en cours ?), nouvelle tentative…";
+        setTimeout(poll, 5000);
+      });
+  }
+  poll();
+})();
+</script>
+{% endblock %}
