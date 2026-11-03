@@ -1,0 +1,42 @@
+{# Tableau des téléchargements, partagé par la page « Mes données », la page admin et le mail. #}
+{% macro rows_table(rows, show_producer=False, style_th="", style_td="") %}
+<table class="table table-sm table-striped" style="border-collapse: collapse; width: 100%;">
+  <thead>
+    <tr>
+      <th style="{{ style_th }}">Date</th>
+      {% if show_producer %}<th style="{{ style_th }}">Organisme producteur</th>{% endif %}
+      <th style="{{ style_th }}">Jeu de données</th>
+      <th style="{{ style_th }}">Export</th>
+      <th style="{{ style_th }}">Format</th>
+      <th style="{{ style_th }}">Téléchargé par</th>
+      <th style="{{ style_th }} text-align: right;" class="text-right">Observations</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td style="{{ style_td }}">{{ r.day.strftime('%d/%m/%Y') }}</td>
+      {% if show_producer %}<td style="{{ style_td }}">{{ r.producer }}</td>{% endif %}
+      <td style="{{ style_td }}">{{ r.dataset }}</td>
+      <td style="{{ style_td }}">{{ r.export }}{% if r.nb_requests > 1 %} <small>({{ r.nb_requests }} fois)</small>{% endif %}</td>
+      <td style="{{ style_td }}">{{ r.export_format or '' }}</td>
+      <td style="{{ style_td }}">{{ r.requester }}</td>
+      <td style="{{ style_td }} text-align: right;" class="text-right">{{ '{:,}'.format(r.nb_observations).replace(',', ' ') }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ 7 if show_producer else 6 }}" style="{{ style_td }}" class="text-muted">Aucun téléchargement sur la période.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% macro period_form(start, end, extra="") %}
+<form method="get" class="form-inline mb-3">
+  <label class="mr-2" for="start">Du</label>
+  <input type="date" class="form-control form-control-sm mr-2" id="start" name="start" value="{{ start.isoformat() }}">
+  <label class="mr-2" for="end">au</label>
+  <input type="date" class="form-control form-control-sm mr-2" id="end" name="end" value="{{ end.isoformat() }}">
+  {{ extra }}
+  <button type="submit" class="btn btn-sm btn-primary">Afficher</button>
+</form>
+{% endmacro %}

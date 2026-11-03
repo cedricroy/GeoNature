@@ -1,0 +1,15 @@
+{% import 'export_tracking/_table.html' as t %}
+<p>Bonjour,</p>
+<p>Voici les téléchargements des données naturalistes de <strong>{{ organisme.nom_organisme }}</strong>
+  du {{ start.strftime('%d/%m/%Y') }} au {{ end.strftime('%d/%m/%Y') }} :
+  <strong>{{ '{:,}'.format(total.nb_observations).replace(',', ' ') }} observations</strong>,
+  issues de {{ total.nb_datasets }} jeu(x) de données.</p>
+<p>Par demandeur :</p>
+<ul>
+{% for name, nb in total.requesters %}<li>{{ name }} : {{ '{:,}'.format(nb).replace(',', ' ') }} observations</li>{% endfor %}
+</ul>
+{{ t.rows_table(rows, style_th="border-bottom: 1px solid #999; text-align: left; padding: 4px;", style_td="border-bottom: 1px solid #ddd; padding: 4px;") }}
+<p>Le détail est consultable à tout moment sur <a href="{{ url_page }}">{{ url_page }}</a>
+  (connexion à GeoNature nécessaire).</p>
+<p style="color:#777; font-size: small">Les téléchargements publics sont anonymes. Quand le demandeur
+  est connu, seul son organisme est indiqué.</p>

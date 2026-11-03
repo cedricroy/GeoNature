@@ -45,6 +45,8 @@ from sqlalchemy import distinct, func, select
 from utils_flask_sqla.generic import GenericTable, serializeQuery
 from utils_flask_sqla.response import to_csv_resp, to_json_resp
 from utils_flask_sqla_geo.generic import GenericTableGeo
+
+from geonature.core.export_tracking import tracking as export_tracking
 from werkzeug.exceptions import BadRequest, Forbidden
 
 export_routes = Blueprint("exports", __name__)
@@ -275,7 +277,18 @@ def export_observations_web(permissions):
     # Get the results for export
     results = DB.session.execute(
         export_query.limit(current_app.config["SYNTHESE"]["NB_MAX_OBS_EXPORT"])
-    )
+    ).fetchall()
+
+    # Suivi des téléchargements par organisme producteur
+    if export_tracking.is_enabled():
+        export_tracking.record_export(
+            export_tracking.SOURCE_SYNTHESE_OBSERVATIONS,
+            export_tracking.count_by_dataset_from_synthese(
+                "id_synthese", [getattr(r, "id_synthese", None) for r in results]
+            ),
+            export_tracking.requester_from_request(),
+            export_format=export_format,
+        )
 
     db_cols_for_shape = []
     columns_to_serialize = []
@@ -396,6 +409,16 @@ def export_metadata(permissions):
 
     # Retrieve the data to write in the csv file
     data = [metadata_view.as_dict(d) for d in data]
+
+    # Suivi des téléchargements : fiches de métadonnées exportées, par jeu de données
+    if export_tracking.is_enabled():
+        id_dataset_col = current_app.config["SYNTHESE"]["EXPORT_METADATA_ID_DATASET_COL"]
+        export_tracking.record_export(
+            export_tracking.SOURCE_SYNTHESE_METADATA,
+            {d.get(id_dataset_col): 0 for d in data if d.get(id_dataset_col)},
+            export_tracking.requester_from_request(),
+            export_format="csv",
+        )
     for d in data:
         d["nombre_total_obs"] = d.pop("nombre_obs")
 

@@ -1,0 +1,65 @@
+{% import 'export_tracking/_table.html' as t %}
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Téléchargements de mes données</title>
+  <link rel="stylesheet" href="{{ url_for('admin.static', filename='bootstrap/bootstrap4/css/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('admin.static', filename='bootstrap/bootstrap4/css/font-awesome.min.css') }}">
+  <style>body { padding: 24px; } .stat { font-size: 1.6rem; font-weight: bold; }</style>
+</head>
+<body>
+<div class="container">
+  <p><a href="{{ url_application }}"><i class="fa fa-arrow-left"></i> Retour à GeoNature</a></p>
+  <h2>Téléchargements de vos données naturalistes</h2>
+
+  {% if not organisme %}
+    <div class="alert alert-warning">
+      Votre compte n'est rattaché à aucun organisme : ce suivi concerne les données des organismes.
+      Contactez l'administrateur de la plateforme.
+    </div>
+  {% else %}
+    <p class="text-muted">
+      Organisme : <strong>{{ organisme.nom_organisme }}</strong>. Sont pris en compte les jeux de
+      données dont votre organisme est acteur ({{ roles_label }}).
+    </p>
+
+    {{ t.period_form(start, end) }}
+
+    <div class="row mb-3">
+      <div class="col-sm-4"><div class="card"><div class="card-body">
+        <div class="stat">{{ '{:,}'.format(total.nb_observations if total else 0).replace(',', ' ') }}</div>
+        observations téléchargées
+      </div></div></div>
+      <div class="col-sm-4"><div class="card"><div class="card-body">
+        <div class="stat">{{ total.nb_datasets if total else 0 }}</div>
+        jeux de données concernés
+      </div></div></div>
+      <div class="col-sm-4"><div class="card"><div class="card-body">
+        <div class="stat">{{ total.requesters|length if total else 0 }}</div>
+        demandeurs différents
+      </div></div></div>
+    </div>
+
+    {% if total %}
+    <h5>Par demandeur</h5>
+    <table class="table table-sm mb-4" style="max-width: 700px">
+      {% for name, nb in total.requesters %}
+      <tr><td>{{ name }}</td><td class="text-right">{{ '{:,}'.format(nb).replace(',', ' ') }} observations</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    <h5>Détail
+      <a class="btn btn-sm btn-outline-secondary ml-2" href="{{ url_for('.my_data_csv', start=start.isoformat(), end=end.isoformat()) }}">
+        <i class="fa fa-download"></i> CSV</a>
+    </h5>
+    {{ t.rows_table(rows) }}
+
+    <p class="small text-muted">Les téléchargements publics sont anonymes : on sait quelles données sont
+      parties, pas qui les a téléchargées. Quand le demandeur est connu, seul son organisme est enregistré.</p>
+  {% endif %}
+</div>
+</body>
+</html>

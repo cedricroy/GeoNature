@@ -31,6 +31,7 @@ from pypnnomenclature.admin import (
 )
 
 from .utils import CruvedProtectedMixin
+from geonature.core.export_tracking.admin import ExportTrackingAdminView
 
 
 class MyHomeView(AdminIndexView):
@@ -151,6 +152,16 @@ admin.add_view(
         db.session,
         name="Modules",
         category="Autres",
+    )
+)
+
+admin.add_view(
+    ExportTrackingAdminView(
+        name="Suivi des exports",
+        category="Autres",
+        endpoint="export_tracking_admin",
+        menu_icon_type="fa",
+        menu_icon_value="fa-line-chart",
     )
 )
 

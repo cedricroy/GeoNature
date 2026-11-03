@@ -185,6 +185,11 @@ def create_app(with_external_mods=True):
 
     admin.init_app(app)
 
+    # Suivi des téléchargements par organisme producteur (module Export)
+    from geonature.core.export_tracking import hooks as export_tracking_hooks
+
+    export_tracking_hooks.init_app(app)
+
     # babel
     babel = Babel(app, locale_selector=get_locale)
 
@@ -222,6 +227,7 @@ def create_app(with_external_mods=True):
         ("geonature.core.sensitivity.routes:routes", None),
         ("geonature.core.notifications.routes:routes", "/notifications"),
         ("geonature.core.imports.blueprint:blueprint", "/import"),
+        ("geonature.core.export_tracking.routes:routes", "/export_tracking"),
     ]:
         module_name, blueprint_name = blueprint_path.split(":")
         blueprint = getattr(import_module(module_name), blueprint_name)

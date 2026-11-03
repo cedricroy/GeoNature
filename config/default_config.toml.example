@@ -603,6 +603,23 @@ MEDIA_CLEAN_CRONTAB = "0 1 * * *"
     MEDIAS_SIZE_MAX = 10000
 
 
+# Suivi des téléchargements de données naturalistes, par organisme producteur
+# (Admin > Autres > Suivi des exports ; page des organismes : <API_ENDPOINT>/export_tracking/mes-donnees)
+[EXPORT_TRACKING]
+    ENABLED = false
+    # Codes ROLE_ACTEUR des acteurs « propriétaires » des données d'un jeu de données :
+    # "1" Contact principal, "5" Fournisseur, "6" Producteur… ; ["*"] = tous les rôles
+    PRODUCER_ACTOR_ROLES = ["6"]
+    # Si le jeu de données n'a aucun acteur avec ces rôles, utiliser ceux du cadre d'acquisition
+    USE_ACQUISITION_FRAMEWORK_ACTORS = true
+    # Montrer aux producteurs l'organisme qui a téléchargé (sinon « Demandeur identifié »)
+    SHOW_REQUESTER_ORGANISM = true
+    # Rapport mensuel envoyé à l'adresse mail de chaque organisme producteur (UsersHub)
+    MONTHLY_REPORT_ENABLED = false
+    MONTHLY_REPORT_CRONTAB = "23 6 1 * *"
+    REPORT_CC = []
+
+
 # Champs additionnels
 [ADDITIONAL_FIELDS]
     IMPLEMENTED_MODULES = ["OCCTAX", "METADATA"]

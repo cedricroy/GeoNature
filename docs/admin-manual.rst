@@ -2518,6 +2518,57 @@ Modification de la fonction de validation automatique
 
 Dans GeoNature, la validation automatique est effectuée par une fonction en ``PL/pgSQL`` déclarée dans le schéma ``gn_profiles``. Si toutefois, le fonctionnement de celle-ci ne correspond pas à vos besoins, indiquez le nom de la nouvelle fonction dans la variable ``AUTO_VALIDATION_SQL_FUNCTION``. Attention, cette fonction doit aussi être stockée dans le schema ``gn_profiles``. Pour vous aider, n'hésitez pas à regarder la définition de la fonction par défaut nommée ``fct_auto_validation``.
 
+Suivi des téléchargements par organisme producteur
+--------------------------------------------------
+
+GeoNature peut indiquer à chaque organisme **quand ses données naturalistes ont été téléchargées**,
+combien d'observations, par quel export, et par qui quand le demandeur est connu. Exemple : asso1 verse
+ses observations, un bureau d'études les télécharge, et asso1 le voit.
+
+**Ce qui est suivi**
+
+* Synthèse : export d'observations (tous formats) et export des métadonnées ;
+* module Export : son API (``/exports/api/<id>``), publique ou avec jeton, et les fichiers générés.
+
+Chaque téléchargement est compté **par jour et par jeu de données**. L'organisme producteur est retrouvé
+à partir des acteurs du jeu de données (``PRODUCER_ACTOR_ROLES``, « Producteur » par défaut), ou de ceux
+de son cadre d'acquisition si le jeu de données n'en a pas. Il est calculé à la consultation : si vous
+corrigez les acteurs d'un jeu de données, l'historique en tient compte.
+
+**Qui a téléchargé ?**
+
+* demandeur connecté à GeoNature, ou utilisant un jeton de l'API du module Export : **son organisme**
+  est enregistré. Le nom de la personne ne l'est jamais ;
+* téléchargement **public** : il est anonyme. On sait quelles données sont parties et combien, mais pas
+  qui les a téléchargées.
+
+Aucune donnée personnelle n'est conservée : ni utilisateur, ni adresse IP.
+
+**Consultation**
+
+* chaque utilisateur connecté voit les téléchargements des données de **son organisme** sur
+  ``<API_ENDPOINT>/export_tracking/mes-donnees``, avec un export CSV ;
+* les administrateurs voient tous les organismes dans « Admin > Autres > Suivi des exports », avec des
+  filtres (période, producteur, demandeur, source) et un export CSV ;
+* si ``MONTHLY_REPORT_ENABLED = true``, chaque organisme producteur reçoit le 1er du mois un récapitulatif
+  du mois précédent, à son adresse mail renseignée dans UsersHub. Les adresses ``REPORT_CC`` sont en copie.
+
+**Activation** : dans ``geonature_config.toml`` :
+
+.. code-block:: toml
+
+    [EXPORT_TRACKING]
+        ENABLED = true
+        PRODUCER_ACTOR_ROLES = ["6"]   # "1" Contact principal, "5" Fournisseur, "6" Producteur, ["*"] tous
+        MONTHLY_REPORT_ENABLED = true
+
+Puis lancez ``geonature db upgrade geonature@head`` et redémarrez ``geonature`` et ``geonature-worker``.
+
+**Module Export** : pour que ses téléchargements soient attribués à un organisme, la vue de l'export doit
+contenir ``id_dataset``, ou ``id_synthese``, ou ``unique_id_sinp``. Sinon, le téléchargement est compté
+en « jeu de données inconnu », et la page admin indique les exports concernés. Les fichiers du module Export
+sont comptés au moment de leur génération. Le téléchargement du fichier lui-même, ensuite, n'est pas suivi.
+
 Module TaxHub
 -------------
 

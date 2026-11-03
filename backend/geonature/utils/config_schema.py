@@ -125,6 +125,26 @@ class AlembicConfig(Schema):
     VERSION_LOCATIONS = fields.String()
 
 
+class ExportTrackingConfig(Schema):
+    """
+    Suivi des téléchargements de données naturalistes, par organisme producteur.
+    Voir la documentation (manuel d'administration) avant de l'activer.
+    """
+
+    ENABLED = fields.Boolean(load_default=False)
+    # Codes ROLE_ACTEUR des acteurs considérés comme « propriétaires » des données :
+    # 1 = Contact principal, 5 = Fournisseur, 6 = Producteur… ; ["*"] = tous les rôles.
+    PRODUCER_ACTOR_ROLES = fields.List(fields.String(), load_default=["6"])
+    # Si un jeu de données n'a aucun acteur avec ces rôles, prendre ceux de son cadre d'acquisition
+    USE_ACQUISITION_FRAMEWORK_ACTORS = fields.Boolean(load_default=True)
+    # Montrer l'organisme demandeur aux organismes producteurs (sinon : « demandeur identifié »)
+    SHOW_REQUESTER_ORGANISM = fields.Boolean(load_default=True)
+    MONTHLY_REPORT_ENABLED = fields.Boolean(load_default=False)
+    MONTHLY_REPORT_CRONTAB = fields.String(load_default="23 6 1 * *")
+    # Adresses en copie de chaque rapport mensuel (administrateurs de la plateforme)
+    REPORT_CC = fields.List(fields.Email(), load_default=[])
+
+
 class AdditionalFields(Schema):
     IMPLEMENTED_MODULES = fields.List(fields.String(), load_default=["OCCTAX", "METADATA"])
     IMPLEMENTED_OBJECTS = fields.List(
@@ -236,6 +256,9 @@ class GnPySchemaConf(Schema):
     SERVER = fields.Nested(ServerConfig, load_default=ServerConfig().load({}))
     MEDIAS = fields.Nested(MediasConfig, load_default=MediasConfig().load({}))
     ALEMBIC = fields.Nested(AlembicConfig, load_default=AlembicConfig().load({}))
+    EXPORT_TRACKING = fields.Nested(
+        ExportTrackingConfig, load_default=ExportTrackingConfig().load({})
+    )
     AUTHENTICATION = fields.Nested(
         AuthenticationConfig, load_default=AuthenticationConfig().load({}), unknown=INCLUDE
     )

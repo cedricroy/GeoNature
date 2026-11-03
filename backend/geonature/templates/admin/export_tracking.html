@@ -1,0 +1,63 @@
+{% extends 'admin/master.html' %}
+{% import 'export_tracking/_table.html' as t %}
+
+{% block body %}
+<p class="text-muted">Téléchargements de données naturalistes, par organisme producteur
+  (acteurs des jeux de données : {{ roles_label }}). Aucune donnée personnelle n'est enregistrée :
+  seul l'organisme du demandeur est conservé quand il est connu.</p>
+
+{% set extra %}
+  <select name="producer" class="form-control form-control-sm mr-2">
+    <option value="">Tous les producteurs</option>
+    {% for o in organismes %}<option value="{{ o.id_organisme }}" {% if filters.producer == o.id_organisme %}selected{% endif %}>{{ o.nom_organisme }}</option>{% endfor %}
+  </select>
+  <select name="requester" class="form-control form-control-sm mr-2">
+    <option value="">Tous les demandeurs</option>
+    {% for o in organismes %}<option value="{{ o.id_organisme }}" {% if filters.requester == o.id_organisme %}selected{% endif %}>{{ o.nom_organisme }}</option>{% endfor %}
+  </select>
+  <select name="source" class="form-control form-control-sm mr-2">
+    <option value="">Toutes les sources</option>
+    {% for key, label in sources.items() %}<option value="{{ key }}" {% if filters.source == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+  </select>
+{% endset %}
+{{ t.period_form(filters.start, filters.end, extra) }}
+
+{% if unattributed %}
+<div class="alert alert-warning">
+  <strong>Exports non attribuables :</strong> la vue de ces exports n'a ni <code>id_dataset</code>,
+  ni <code>id_synthese</code>, ni <code>unique_id_sinp</code>. Leurs téléchargements sont comptés,
+  mais on ne sait pas à quel organisme ils appartiennent. Ajoutez <code>id_dataset</code> à la vue.
+  <ul class="mb-0">
+  {% for e in unattributed %}<li>Export n°{{ e.id_export }} « {{ e.export_label }} » ({{ e.nb_observations }} lignes)</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<h5>Par organisme producteur
+  <a class="btn btn-sm btn-outline-secondary ml-2" href="{{ url_for('.csv') }}?{{ query_string }}"><i class="fa fa-download"></i> CSV</a>
+</h5>
+{% set max_obs = (summary|map(attribute='nb_observations')|max) if summary else 0 %}
+<table class="table table-sm mb-4">
+  <thead><tr><th>Organisme producteur</th><th>Jeux de données</th><th>Observations téléchargées</th><th>Principaux demandeurs</th></tr></thead>
+  <tbody>
+  {% for s in summary %}
+  <tr>
+    <td>{{ s.producer }}</td>
+    <td>{{ s.nb_datasets }}</td>
+    <td style="min-width: 220px">
+      <div style="background:#007bff;height:8px;width:{{ (100 * s.nb_observations / max_obs) if max_obs else 0 }}%"></div>
+      {{ '{:,}'.format(s.nb_observations).replace(',', ' ') }}
+    </td>
+    <td class="small">{% for name, nb in s.requesters[:3] %}{{ name }} ({{ '{:,}'.format(nb).replace(',', ' ') }}){% if not loop.last %}, {% endif %}{% endfor %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="text-muted">Aucun téléchargement sur la période.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h5>Détail</h5>
+{{ t.rows_table(rows, show_producer=True) }}
+<p class="small text-muted">Page des organismes : <code>{{ url_for('export_tracking.my_data') }}</code>
+  (chaque utilisateur y voit les téléchargements des données de son organisme).</p>
+{% endblock %}
