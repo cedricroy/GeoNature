@@ -142,9 +142,21 @@ def _track_generated_file(args, kwargs):
         return
     try:
         params = dict(kwargs or {})
-        names = ["export_id", "file_name", "export_url", "format", "id_role", "filters"]
+        names = [
+            "export_id",
+            "file_name",
+            "export_url",
+            "format",
+            "id_role",
+            "filters",
+            "schedule_id",
+        ]
         for key, value in zip(names, args or ()):
             params.setdefault(key, value)
+        # Export programmé (régénéré chaque nuit, sans demandeur) : ce n'est pas un
+        # téléchargement, on ne le compte pas.
+        if params.get("schedule_id") is not None:
+            return
         info = _export_info(params.get("export_id"))
         if not info:
             return

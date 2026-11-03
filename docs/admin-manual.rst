@@ -2569,7 +2569,10 @@ Puis lancez ``geonature db upgrade geonature@head`` et redémarrez ``geonature``
 **Module Export** : pour que ses téléchargements soient attribués à un organisme, la vue de l'export doit
 contenir ``id_dataset``, ou ``id_synthese``, ou ``unique_id_sinp``. Sinon, le téléchargement est compté
 en « jeu de données inconnu », et la page admin indique les exports concernés. Les fichiers du module Export
-sont comptés au moment de leur génération. Le téléchargement du fichier lui-même, ensuite, n'est pas suivi.
+sont comptés à chaque demande, avec l'organisme du demandeur : une même vue demandée par deux personnes est
+comptée deux fois. En revanche, la réutilisation du lien d'un fichier déjà généré (lien transféré, fichier
+programmé servi en accès direct) n'est pas suivie. Les exports programmés, régénérés automatiquement chaque nuit,
+ne sont pas comptés : ce ne sont pas des téléchargements.
 
 Module TaxHub
 -------------
