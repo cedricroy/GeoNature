@@ -16,9 +16,7 @@ def setup_periodic_tasks(sender, **kwargs):
     cfg = config.get("EXPORT_TRACKING", {})
     if not (cfg.get("ENABLED") and cfg.get("MONTHLY_REPORT_ENABLED")):
         return
-    minute, hour, day_of_month, month_of_year, day_of_week = cfg["MONTHLY_REPORT_CRONTAB"].split(
-        " "
-    )
+    minute, hour, day_of_month, month_of_year, day_of_week = cfg["MONTHLY_REPORT_CRONTAB"].split()
     sender.add_periodic_task(
         crontab(
             minute=minute,
@@ -81,11 +79,18 @@ def send_monthly_reports(self, start=None, end=None):
             url_page=current_app.config["API_ENDPOINT"] + "/export_tracking/mes-donnees",
             **report,
         )
-        send_mail(
-            recipients,
-            f"Téléchargements de vos données naturalistes – {start.strftime('%m/%Y')}",
-            html,
-        )
+        try:
+            send_mail(
+                recipients,
+                f"Téléchargements de vos données naturalistes – {start.strftime('%m/%Y')}",
+                html,
+            )
+        except Exception:
+            # Adresse invalide, serveur SMTP indisponible… : on passe à l'organisme suivant.
+            logger.exception(
+                "Rapport non envoyé à l'organisme %s", report["organisme"]["nom_organisme"]
+            )
+            continue
         sent += 1
     logger.info("Suivi des exports : %s rapport(s) envoyé(s).", sent)
     return sent

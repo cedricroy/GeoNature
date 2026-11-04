@@ -2560,7 +2560,11 @@ Aucune donnée personnelle n'est conservée : ni utilisateur, ni adresse IP.
 membres ne voient pas le suivi, et aucun rapport ne lui est envoyé. Les administrateurs voient toujours tout.
 
 **Comptage** : chaque appel à l'API du module Export compte comme un téléchargement, y compris chaque page
-d'un parcours paginé. Pour un fichier du module Export, le décompte par jeu de données est fait sur la vue
+d'un parcours paginé (le nombre d'observations, lui, reste exact). Un export vide n'est pas enregistré.
+
+**Ce que voient les organismes** : tout membre connecté d'un organisme producteur voit les organismes qui ont
+téléchargé ses données. Pour n'afficher que « Demandeur identifié », mettez ``SHOW_REQUESTER_ORGANISM = false``.
+Un organisme avec un seul membre permet d'identifier cette personne : tenez-en compte. Pour un fichier du module Export, le décompte par jeu de données est fait sur la vue
 entière, comme le fichier généré. Les fiches de métadonnées exportées apparaissent dans le détail, mais pas dans
 les totaux d'observations.
 

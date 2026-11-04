@@ -3,6 +3,7 @@
 import datetime
 import hashlib
 import logging
+import threading
 import time
 from collections import Counter, OrderedDict
 
@@ -43,6 +44,7 @@ UNKNOWN_DATASET = 0
 _token_cache = OrderedDict()
 TOKEN_CACHE_SECONDS = 600
 TOKEN_CACHE_MAX_SIZE = 1000
+_token_cache_lock = threading.Lock()
 
 
 def is_enabled():
@@ -86,21 +88,23 @@ def _request_token():
 
 
 def _cache_get(key):
-    entry = _token_cache.get(key)
-    if entry is None:
-        return None
-    if time.monotonic() - entry[0] >= TOKEN_CACHE_SECONDS:
-        _token_cache.pop(key, None)
-        return None
-    _token_cache.move_to_end(key)
-    return entry[1]
+    with _token_cache_lock:
+        entry = _token_cache.get(key)
+        if entry is None:
+            return None
+        if time.monotonic() - entry[0] >= TOKEN_CACHE_SECONDS:
+            _token_cache.pop(key, None)
+            return None
+        _token_cache.move_to_end(key)
+        return entry[1]
 
 
 def _cache_set(key, value):
-    _token_cache[key] = (time.monotonic(), value)
-    _token_cache.move_to_end(key)
-    while len(_token_cache) > TOKEN_CACHE_MAX_SIZE:
-        _token_cache.popitem(last=False)
+    with _token_cache_lock:
+        _token_cache[key] = (time.monotonic(), value)
+        _token_cache.move_to_end(key)
+        while len(_token_cache) > TOKEN_CACHE_MAX_SIZE:
+            _token_cache.popitem(last=False)
 
 
 def requester_from_request(id_export=None):
@@ -149,25 +153,25 @@ def count_by_dataset_from_synthese(column, values):
         return Counter({UNKNOWN_DATASET: nb_empty}) if nb_empty else Counter()
     if column == "id_synthese":
         query = sa.text(
-            "SELECT id_dataset, count(*) FROM gn_synthese.synthese "
-            "WHERE id_synthese = ANY(CAST(:values AS integer[])) GROUP BY id_dataset"
+            "SELECT id_synthese::text, id_dataset FROM gn_synthese.synthese "
+            "WHERE id_synthese = ANY(CAST(:values AS integer[]))"
         )
     elif column == "unique_id_sinp":
         query = sa.text(
-            "SELECT id_dataset, count(*) FROM gn_synthese.synthese "
-            "WHERE unique_id_sinp = ANY(CAST(:values AS uuid[])) GROUP BY id_dataset"
+            "SELECT unique_id_sinp::text, id_dataset FROM gn_synthese.synthese "
+            "WHERE unique_id_sinp = ANY(CAST(:values AS uuid[]))"
         )
     else:
         raise ValueError(column)
-    counts = Counter()
-    for start in range(0, len(values), 10000):
-        chunk = values[start : start + 10000]
-        rows = db.session.execute(query, {"values": [str(v) for v in chunk]})
-        for id_dataset, nb in rows:
-            counts[id_dataset or UNKNOWN_DATASET] += nb
-    found = sum(counts.values())
-    if found < len(values):
-        counts[UNKNOWN_DATASET] += len(values) - found
+    # Correspondance valeur -> jeu de données (valeurs distinctes), puis décompte ligne
+    # par ligne : une valeur répétée compte autant de fois qu'elle a été exportée.
+    distinct_values = list({str(v) for v in values})
+    dataset_of = {}
+    for start in range(0, len(distinct_values), 10000):
+        chunk = distinct_values[start : start + 10000]
+        for value, id_dataset in db.session.execute(query, {"values": chunk}):
+            dataset_of.setdefault(value.lower(), id_dataset)
+    counts = Counter(dataset_of.get(str(v).lower()) or UNKNOWN_DATASET for v in values)
     if nb_empty:
         counts[UNKNOWN_DATASET] += nb_empty
     return counts
@@ -283,6 +287,8 @@ def record_export(
     """
     if not is_enabled():
         return
+    if not dataset_counts:
+        return  # export vide : rien n'a été téléchargé
     requester_type, id_organisme = requester
     day = day or datetime.date.today()
     key = "|".join(

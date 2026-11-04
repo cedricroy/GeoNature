@@ -52,7 +52,12 @@ class ExportTrackingAdminView(CruvedProtectedMixin, BaseView):
             filters=filters,
             rows=reports.merge_producers(rows),
             summary=reports.summary_by_producer(rows),
-            unattributed=reports.unattributed_exports(filters["start"], filters["end"]),
+            unattributed=reports.unattributed_exports(
+                filters["start"],
+                filters["end"],
+                requester=filters["requester"],
+                source=filters["source"],
+            ),
             organismes=reports.organismes(),
             sources=SOURCE_LABELS,
             roles_label=reports.producer_roles_label(),

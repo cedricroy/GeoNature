@@ -6,6 +6,7 @@ Branchement du suivi sur le module Export (gn_module_export), sans le modifier :
 """
 
 import logging
+import os
 import re
 
 import sqlalchemy as sa
@@ -146,8 +147,10 @@ def on_task_postrun(
     if isinstance(retval, BaseException):  # tâche terminée sur une erreur rattrapée
         return
     if has_app_context():
-        # Mode eager (tâche exécutée dans la requête HTTP) : on enregistre dans la
-        # session de la requête, sans la fermer.
+        # Mode eager (tâche exécutée dans la requête HTTP, utilisé en test) : on
+        # enregistre dans la session de la requête, sans la fermer. record_export
+        # valide alors la transaction de la requête du module Export, dont la route
+        # ne fait que des lectures.
         _track_generated_file(args, kwargs, own_context=False)
         return
     # Mode worker : le signal est envoyé hors du contexte Flask de la tâche.
@@ -179,6 +182,18 @@ def _track_generated_file(args, kwargs, own_context):
         # Export programmé (régénéré chaque nuit, sans demandeur) : ce n'est pas un
         # téléchargement, on ne le compte pas.
         if params.get("schedule_id") is not None:
+            return
+        # Garde-fou : une génération à la demande a toujours un demandeur connecté.
+        if params.get("id_role") is None:
+            return
+        # Génération ratée sans exception (erreur rattrapée par le module) : pas de fichier.
+        file_name = params.get("file_name")
+        if (
+            isinstance(file_name, str)
+            and os.path.isabs(file_name)
+            and not os.path.exists(file_name)
+        ):
+            log.info("Suivi des exports : fichier %s absent, export non compté", file_name)
             return
         info = _export_info(params.get("export_id"))
         if not info:

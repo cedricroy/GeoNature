@@ -250,7 +250,7 @@ def summary_by_producer(rows):
     return result
 
 
-def unattributed_exports(start, end):
+def unattributed_exports(start, end, requester=None, source=None):
     """Exports du module Export dont la vue ne permet pas de retrouver le jeu de données."""
     return (
         db.session.execute(
@@ -261,10 +261,13 @@ def unattributed_exports(start, end):
             FROM gn_commons.t_export_tracking t
             JOIN gn_commons.cor_export_tracking_dataset c ON c.id_tracking = t.id_tracking
             WHERE c.id_dataset = 0 AND t.day BETWEEN :start AND :end
+              AND t.source IN ('export_api', 'export_file')
+              AND (CAST(:requester AS integer) IS NULL OR t.requester_id_organisme = :requester)
+              AND (CAST(:source AS text) IS NULL OR t.source = :source)
             GROUP BY t.id_export
             """
             ),
-            {"start": start, "end": end},
+            {"start": start, "end": end, "requester": requester, "source": source},
         )
         .mappings()
         .all()

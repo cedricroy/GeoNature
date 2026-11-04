@@ -813,11 +813,11 @@ class TestOcctaxGetReleveFilter:
                 "JOIN gn_commons.cor_export_tracking_dataset c USING (id_tracking)"
             )
         ).all()
+        assert nb_rows > 0  # la fixture « occurrence » garantit au moins une ligne
         assert sum(row.nb_observations for row in tracked) == nb_rows
-        if nb_rows:
-            assert {row.source for row in tracked} == {"occtax"}
-            assert {row.requester_id_organisme for row in tracked} == {users["user"].id_organisme}
-            assert {row.id_dataset for row in tracked} == {id_dataset}
+        assert {row.source for row in tracked} == {"occtax"}
+        assert {row.requester_id_organisme for row in tracked} == {users["user"].id_organisme}
+        assert {row.id_dataset for row in tracked} == {id_dataset}
 
     def test_export_occtax_no_additional(
         self, users: dict, datasets: dict[Any, TDatasets], occurrence

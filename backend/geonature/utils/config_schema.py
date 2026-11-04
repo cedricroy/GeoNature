@@ -140,7 +140,10 @@ class ExportTrackingConfig(Schema):
     # Montrer l'organisme demandeur aux organismes producteurs (sinon : « demandeur identifié »)
     SHOW_REQUESTER_ORGANISM = fields.Boolean(load_default=True)
     MONTHLY_REPORT_ENABLED = fields.Boolean(load_default=False)
-    MONTHLY_REPORT_CRONTAB = fields.String(load_default="23 6 1 * *")
+    MONTHLY_REPORT_CRONTAB = fields.String(
+        load_default="23 6 1 * *",
+        validate=Regexp(r"^\s*(\S+\s+){4}\S+\s*$", error="Crontab invalide : 5 champs attendus."),
+    )
     # Adresses en copie de chaque rapport mensuel (administrateurs de la plateforme)
     REPORT_CC = fields.List(fields.Email(), load_default=[])
     # Organismes partagés par des personnes sans lien entre elles (« Particulier »,
