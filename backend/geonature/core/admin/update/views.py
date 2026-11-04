@@ -49,6 +49,7 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
         release = utils.latest_release()
         taxref = utils.taxref_info()
         taxref_next = utils.taxref_next_version(taxref["version"] if taxref else None)
+        status = utils.current_status()
         return self.render(
             "admin/update.html",
             current_version=current,
@@ -57,7 +58,8 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
             allow_core_update=current_app.config["UPDATER"]["ALLOW_CORE_UPDATE"],
             modules=utils.list_modules(),
             ref_targets=utils.REF_TARGETS,
-            status=utils.read_status(),
+            status=status,
+            busy=status.get("state") in utils.STATE_RUNNING,
             can_update=self._can_action("U"),
             csrf_token=_csrf_token(),
             taxref=taxref,
@@ -80,7 +82,7 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
 
     @expose("/status")
     def status(self):
-        return jsonify(status=utils.read_status(), log=utils.read_log_tail())
+        return jsonify(status=utils.current_status(), log=utils.read_log_tail())
 
     @expose("/run", methods=["POST"])
     def run(self):
@@ -103,10 +105,24 @@ class UpdateAdminView(CruvedProtectedMixin, BaseView):
         except utils.UpdateRequestError as exc:
             flash(str(exc), "error")
             return redirect(url_for(".index"))
-        if utils.is_busy():
-            flash("Une mise à jour est déjà en cours.", "error")
-            return redirect(url_for(".index"))
-        utils.write_status(state="queued", queued_ts=time.time(), action=action, target=target)
-        launch_update.delay(action, target, g.current_user.id_role)
+        # Vérification + écriture de « queued » + envoi de la tâche sous verrou : deux
+        # demandes simultanées (deux onglets, deux admins) ne peuvent pas se chevaucher.
+        with utils.exclusive("request.lock"):
+            if utils.is_busy():
+                flash("Une mise à jour est déjà en cours.", "error")
+                return redirect(url_for(".index"))
+            utils.write_status(state="queued", queued_ts=time.time(), action=action, target=target)
+            try:
+                launch_update.delay(action, target, g.current_user.id_role)
+            except Exception as exc:  # Redis / broker indisponible
+                current_app.logger.exception("Mise à jour : envoi de la tâche impossible")
+                utils.write_status(
+                    state="failed",
+                    action=action,
+                    target=target,
+                    message=f"Impossible d'envoyer la demande au worker Celery : {exc}",
+                )
+                flash("Impossible d'envoyer la demande (worker Celery indisponible).", "error")
+                return redirect(url_for(".index"))
         flash("Mise à jour demandée. Suivez son avancement dans le journal ci-dessous.", "info")
         return redirect(url_for(".index"))

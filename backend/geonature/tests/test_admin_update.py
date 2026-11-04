@@ -1,5 +1,6 @@
-import os
+import fcntl
 import json
+import time
 import subprocess
 from unittest import mock
 
@@ -23,6 +24,16 @@ def updater(monkeypatch, tmp_path):
     monkeypatch.setitem(current_app.config, "UPDATER", cfg)
     monkeypatch.setattr(utils, "latest_release", lambda repo=None: None)
     return cfg
+
+
+@pytest.fixture
+def script_lock(updater):
+    """Simule un script de mise à jour en cours : il tient STATE_DIR/update.lock."""
+    utils.state_dir().mkdir(parents=True, exist_ok=True)
+    with open(utils.state_dir() / "update.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 
 @pytest.fixture
@@ -63,7 +74,7 @@ class TestUpdateAdminView:
         assert "Mettre à jour la base" in response.text
         assert "Rebuild du frontend" in response.text
 
-    def test_status(self, users, updater):
+    def test_status(self, users, updater, script_lock):
         set_logged_user(self.client, users["admin_user"])
         response = self.client.get(url_for("update.status"))
         assert response.status_code == 200
@@ -159,7 +170,7 @@ class TestUpdateAdminView:
         assert request["REQUESTED_BY"] == f'"{users["admin_user"].id_role}"'
         assert utils.read_status()["state"] == "queued"
 
-    def test_run_busy(self, users, updater, mock_systemctl, celery_eager):
+    def test_run_busy(self, users, updater, mock_systemctl, celery_eager, script_lock):
         set_logged_user(self.client, users["admin_user"])
         token = self._set_csrf()
         utils.write_status(state="running")
@@ -225,17 +236,19 @@ class TestUpdateUtils:
         assert not utils.is_newer("2.17.5", "2.17.5")
 
     def test_stale_queued_is_not_busy(self, app, updater):
+        utils.write_status(state="queued", queued_ts=time.time())
+        assert utils.is_busy()
         utils.write_status(state="queued", queued_ts=0)
         assert not utils.is_busy()
-        utils.write_status(state="running")
-        assert utils.is_busy()
+        assert utils.read_status()["state"] == "failed"
 
-    def test_running_with_dead_process_is_not_busy(self, app, updater):
-        utils.write_status(state="running", pid=os.getpid())
-        assert utils.is_busy()
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        utils.write_status(state="running", pid=dead.pid)
+    def test_running_without_lock_is_failed(self, app, updater, script_lock):
+        utils.write_status(state="running")
+        assert utils.is_busy()  # le verrou est tenu : un script tourne
+
+    def test_running_dead_script_is_failed(self, app, updater):
+        # Aucun script ne tient le verrou (tué, serveur redémarré)
+        utils.write_status(state="running")
         assert not utils.is_busy()
         assert utils.read_status()["state"] == "failed"
 
@@ -307,3 +320,31 @@ class TestTaxrefUpdate:
             url_for("update.taxref_report", version=18, filename="status.json")
         )
         assert response.status_code == 404
+
+
+@pytest.mark.usefixtures("client_class", "temporary_transaction")
+class TestUpdateStatusRecovery:
+    def test_page_and_status_recover(self, users, updater):
+        """La page et /status remettent en échec un état « running » périmé."""
+        set_logged_user(self.client, users["admin_user"])
+        utils.write_status(state="running")
+        response = self.client.get(url_for("update.status"))
+        assert response.json["status"]["state"] == "failed"
+        utils.write_status(state="queued", queued_ts=0)
+        self.client.get(url_for("update.index"))
+        assert utils.read_status()["state"] == "failed"
+
+    def test_delay_failure(self, users, updater, monkeypatch):
+        from geonature.core.admin.update import views
+
+        def broken_delay(*args, **kwargs):
+            raise ConnectionError("broker indisponible")
+
+        monkeypatch.setattr(views.launch_update, "delay", broken_delay)
+        set_logged_user(self.client, users["admin_user"])
+        with self.client.session_transaction() as session:
+            session[CSRF_SESSION_KEY] = "tok"
+        self.client.post(url_for("update.run"), data={"action": "db", "csrf_token": "tok"})
+        status = utils.read_status()
+        assert status["state"] == "failed"
+        assert "Celery" in status["message"]

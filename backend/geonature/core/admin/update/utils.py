@@ -1,7 +1,8 @@
+import fcntl
 import json
-import os
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
@@ -44,6 +45,7 @@ STATE_RUNNING = ("queued", "running")
 
 _release_cache = {}
 RELEASE_CACHE_SECONDS = 3600
+RELEASE_ERROR_CACHE_SECONDS = 300  # un échec GitHub n'est retenu que 5 minutes
 
 
 class UpdateRequestError(ValueError):
@@ -144,7 +146,9 @@ def latest_release(repo=None):
     if not GITHUB_REPO_RE.match(repo):
         return None
     cached = _release_cache.get(repo)
-    if cached and time.monotonic() - cached[0] < RELEASE_CACHE_SECONDS:
+    if cached and time.monotonic() - cached[0] < (
+        RELEASE_CACHE_SECONDS if cached[1] is not None else RELEASE_ERROR_CACHE_SECONDS
+    ):
         return cached[1]
     try:
         response = requests.get(
@@ -199,45 +203,71 @@ def write_status(**status):
 QUEUED_TIMEOUT_SECONDS = 600
 
 
-def process_is_alive(pid):
-    """Le processus du script de mise à jour existe-t-il encore ? (même utilisateur)"""
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (TypeError, ValueError, OSError):
-        return None
-    return True
-
-
-def is_busy():
+def script_is_running():
     """
-    Vrai si une mise à jour tourne. Une demande restée « queued » plus de
-    10 minutes (worker Celery arrêté, par exemple) ne bloque plus l'outil, ni un
-    état « running » alors que le script n'existe plus (tué, serveur redémarré).
+    Un script de mise à jour tourne-t-il ? On teste son verrou (update.lock) sans
+    le garder : fiable même si le PID enregistré a été réutilisé après un redémarrage.
+    """
+    lock_path = state_dir() / "update.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        with open(lock_path, "a") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return True  # dans le doute, on considère qu'un script tourne
+
+
+def current_status():
+    """
+    État courant, corrigé si besoin et enregistré :
+    - « running » alors qu'aucun script ne tient le verrou → « failed » (script tué,
+      serveur redémarré) ;
+    - « queued » depuis plus de 10 minutes (worker Celery arrêté…) → « failed ».
     """
     status = read_status()
     state = status.get("state")
-    if state == "running":
-        if status.get("pid") and process_is_alive(status["pid"]) is False:
-            write_status(
-                **dict(
-                    status,
-                    state="failed",
-                    message="Mise à jour interrompue (le script s'est arrêté avant la fin). "
-                    "Consultez le journal.",
-                )
-            )
-            return False
-        return True
-    if state == "queued":
+    message = None
+    if state == "running" and not script_is_running():
+        message = (
+            "Mise à jour interrompue (le script s'est arrêté avant la fin). Consultez le journal."
+        )
+    elif state == "queued":
         try:
-            return time.time() - float(status.get("queued_ts", 0)) < QUEUED_TIMEOUT_SECONDS
+            expired = time.time() - float(status.get("queued_ts", 0)) >= QUEUED_TIMEOUT_SECONDS
         except (TypeError, ValueError):
-            return False
-    return False
+            expired = True
+        if expired and not script_is_running():
+            message = (
+                "La demande n'a pas été prise en charge (worker Celery ou service de mise à "
+                "jour indisponible)."
+            )
+    if message:
+        status = dict(status, state="failed", message=message)
+        write_status(**status)
+    return status
+
+
+def is_busy():
+    """Vrai si une mise à jour est en attente ou en cours (après correction de l'état)."""
+    return current_status().get("state") in STATE_RUNNING
+
+
+@contextmanager
+def exclusive(name):
+    """Verrou fichier inter-processus (gunicorn, Celery) dans STATE_DIR."""
+    state_dir().mkdir(parents=True, exist_ok=True)
+    with open(state_dir() / name, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def read_log_tail(max_lines=200):

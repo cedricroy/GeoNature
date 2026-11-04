@@ -30,11 +30,16 @@ def launch_update(self, action, target=None, id_role=None):
     except utils.UpdateRequestError as exc:
         utils.write_status(state="failed", message=str(exc), finished_at=_now(), **base_status)
         return
-    if utils.read_status().get("state") == "running":
-        logger.warning("Une mise à jour est déjà en cours, demande ignorée.")
-        return
     if id_role is not None:
         env["REQUESTED_BY"] = str(int(id_role))
+    with utils.exclusive("task.lock"):
+        _write_and_start(env, base_status, action, target)
+
+
+def _write_and_start(env, base_status, action, target):
+    if utils.script_is_running():
+        logger.warning("Une mise à jour est déjà en cours, demande ignorée.")
+        return
     try:
         utils.write_request(env)
     except (utils.UpdateRequestError, OSError) as exc:

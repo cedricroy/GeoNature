@@ -36,7 +36,22 @@ if [[ -z "${GN_UPDATE_BASE_DIR:-}" ]]; then
     exec bash "${copy}" "$@"
 fi
 BASE_DIR="${GN_UPDATE_BASE_DIR}"
-trap '[[ -n "${GN_UPDATE_SELF_COPY:-}" ]] && rm -f "${GN_UPDATE_SELF_COPY}"' EXIT
+PGPASS_TMP=""
+TMP_PATHS=()
+cleanup_on_exit() {
+    if [[ -n "${GN_UPDATE_SELF_COPY:-}" ]]; then rm -f "${GN_UPDATE_SELF_COPY}"; fi
+    if [[ -n "${PGPASS_TMP:-}" ]]; then rm -f "${PGPASS_TMP}"; fi
+    if [[ ${#TMP_PATHS[@]} -gt 0 ]]; then rm -rf -- "${TMP_PATHS[@]}"; fi
+}
+# Fichier ou dossier temporaire supprimé à la sortie, même après une interruption.
+# Usage : tmp_path VAR [-d]  (pas de sous-shell : la liste doit rester dans le shell courant)
+tmp_path() {
+    local _path
+    _path="$(umask 077; mktemp ${2:+"$2"})"
+    TMP_PATHS+=("${_path}")
+    printf -v "$1" '%s' "${_path}"
+}
+trap cleanup_on_exit EXIT
 
 if [[ "$(id -u)" == "0" ]]; then
     echo "Ce script ne doit pas être lancé en root." >&2
@@ -61,25 +76,37 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Échec avant que le journal soit prêt : lancé par le service, on marque la demande
+# « queued » en échec pour que l'interface ne reste pas bloquée.
+early_fail() {
+    echo "Erreur : $*" >&2
+    if [[ "${FROM_REQUEST}" == 1 ]]; then
+        local dir="${STATE_DIR:-/var/lib/geonature/update}" msg="${*//[\"\\]/ }"
+        if [[ -d "${dir}" && -w "${dir}" ]]; then
+            printf '{"state":"failed","message":"%s","finished_at":"%s","runner":"service"}\n' \
+                "${msg}" "$(date -Iseconds)" > "${dir}/status.json.tmp" \
+                && mv "${dir}/status.json.tmp" "${dir}/status.json"
+        fi
+    fi
+    exit 2
+}
+
 # Lecture stricte du fichier de demande (pas de « source » : aucune expansion shell)
 REQUEST_KEYS=" ACTION TARGET MODULE_CODE MODULE_REF MODULE_DIR MODULE_REPO GITHUB_REPO BACKUP_DB BACKUP_KEEP TAXREF_STEP TAXREF_VERSION TAXREF_KEEP_CDNOM TAXREF_REGION STATE_DIR LOG_DIR REQUESTED_BY "
 read_request() {
     local file="$1" line key value
     if [[ -z "${file}" || ! -f "${file}" ]]; then
-        echo "Fichier de demande introuvable : '${file}'" >&2
-        exit 2
+        early_fail "Fichier de demande introuvable : '${file}'"
     fi
     while IFS= read -r line || [[ -n "${line}" ]]; do
         [[ -z "${line}" ]] && continue
         if [[ ! "${line}" =~ ^([A-Z_]+)=\"([^\"\\\$\`]*)\"$ ]]; then
-            echo "Ligne invalide dans ${file} : ${line}" >&2
-            exit 2
+            early_fail "Ligne invalide dans le fichier de demande"
         fi
         key="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
         if [[ "${REQUEST_KEYS}" != *" ${key} "* ]]; then
-            echo "Clé inconnue dans ${file} : ${key}" >&2
-            exit 2
+            early_fail "Clé inconnue dans le fichier de demande : ${key}"
         fi
         printf -v "${key}" '%s' "${value}"
     done < "${file}"
@@ -110,10 +137,10 @@ STATE_DIR="${STATE_DIR:-/var/lib/geonature/update}"
 LOG_DIR="${LOG_DIR:-/var/log/geonature/update}"
 
 # --- Journal et statut ------------------------------------------------------------
-[[ "${STATE_DIR}" == /* && "${LOG_DIR}" == /* ]] || { echo "STATE_DIR et LOG_DIR doivent être absolus" >&2; exit 2; }
-[[ "${STATE_DIR}" != *..* && "${LOG_DIR}" != *..* ]] || { echo "Chemin invalide" >&2; exit 2; }
+[[ "${STATE_DIR}" == /* && "${LOG_DIR}" == /* ]] || early_fail "STATE_DIR et LOG_DIR doivent être absolus"
+[[ "${STATE_DIR}" != *..* && "${LOG_DIR}" != *..* ]] || early_fail "Chemin invalide"
 TS="$(date +%Y%m%d-%H%M%S)"
-mkdir -p "${STATE_DIR}" "${LOG_DIR}"
+mkdir -p "${STATE_DIR}" "${LOG_DIR}" || early_fail "Impossible de créer ${STATE_DIR} ou ${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/${TS}-${ACTION//[^a-z]/}-$$.log"
 STATUS_FILE="${STATE_DIR}/status.json"
 STARTED_AT="$(date -Iseconds)"
@@ -130,8 +157,9 @@ json_escape() {
 
 write_status() {  # write_status STATE [MESSAGE]
     local state="$1" message="${2:-}" finished=""
+    # --dry-run n'écrase pas l'état réel affiché par l'interface
+    if [[ "${DRY_RUN}" == 1 ]]; then return 0; fi
     if [[ "${state}" != running ]]; then finished=",\"finished_at\":\"$(date -Iseconds)\""; fi
-    if [[ "${DRY_RUN}" == 1 ]]; then message="[dry-run] ${message}"; fi
     printf '{"state":"%s","action":"%s","target":"%s","message":"%s","log_file":"%s","started_at":"%s","pid":%s,"runner":"%s"%s}\n' \
         "${state}" "$(json_escape "${ACTION}")" "$(json_escape "${TARGET_LABEL}")" "$(json_escape "${message}")" \
         "$(json_escape "${LOG_FILE}")" "${STARTED_AT}" "$$" "${RUNNER}" "${finished}" > "${STATUS_FILE}.tmp"
@@ -153,8 +181,11 @@ case "${ACTION}" in
     core)
         [[ "${TARGET}" =~ ${re_version} ]] || die_usage "version invalide : '${TARGET}'"
         current_version="$(cat "${BASE_DIR}/VERSION" 2>/dev/null || echo 0)"
+        # sort -V classe 2.18.0rc1 après 2.18.0 : on compare aussi les versions de base
+        target_base="${TARGET%%[!0-9.]*}"; target_base="${target_base%.}"
         if [[ "$(printf '%s\n%s\n' "${current_version}" "${TARGET}" | sort -V | tail -n1)" != "${TARGET}" \
-            || "${current_version}" == "${TARGET}" ]]; then
+            || "${current_version}" == "${TARGET}" \
+            || ( "${target_base}" == "${current_version}" && "${TARGET}" != "${target_base}" ) ]]; then
             die_usage "la version ${TARGET} n'est pas plus récente que la version installée (${current_version})"
         fi
         [[ "${GITHUB_REPO}" =~ ${re_repo} ]] || die_usage "dépôt GitHub invalide"
@@ -186,12 +217,18 @@ esac
 
 # --- Verrou -------------------------------------------------------------------
 exec 9>"${STATE_DIR}/update.lock"
-if ! flock -n 9; then
+# Attente courte : l'interface teste ce verrou (sans le garder) pour savoir si un script tourne.
+if ! flock -w 10 9; then
+    # Un autre script tourne : il possède status.json, on n'y touche pas.
     echo "Une mise à jour est déjà en cours, arrêt." >&2
     exit 3
 fi
 
-exec > >(tee -a "${LOG_FILE}") 2>&1
+# Sortie d'origine conservée sur le descripteur 8. Le « tee » ignore les signaux : un
+# arrêt du service (SIGTERM à tout le groupe) ne coupe plus le journal, et le
+# gestionnaire d'erreur peut encore écrire pendant le retour arrière.
+exec 8>&1
+exec > >(trap '' INT TERM HUP; exec tee -a --output-error=warn "${LOG_FILE}" >&8) 2>&1
 
 step() { echo; echo "==> $*"; }
 
@@ -202,11 +239,20 @@ run() {  # affiche et exécute une commande (ou l'affiche seulement en --dry-run
 
 ROLLBACK=""
 MAIN_PID="${BASHPID}"
+IN_ERROR=0
 on_error() {
     local code=$?
+    if [[ -n "${1:-}" ]]; then code="$1"; fi
     # Dans un sous-shell, on laisse le shell principal gérer l'erreur.
     if [[ "${BASHPID}" != "${MAIN_PID}" ]]; then exit "${code}"; fi
+    # Pas de ré-entrée (second signal pendant le retour arrière)
+    if [[ "${IN_ERROR}" == 1 ]]; then return 0; fi
+    IN_ERROR=1
     trap - ERR
+    trap '' INT TERM HUP PIPE
+    # Nouveau « tee » au cas où le premier aurait disparu (sinon : fichier seul)
+    exec > >(trap '' INT TERM HUP PIPE; exec tee -a --output-error=warn "${LOG_FILE}" >&8 2>/dev/null) 2>&1 \
+        || exec >>"${LOG_FILE}" 2>&1
     echo
     echo "!! Échec (code ${code})."
     if [[ -n "${ROLLBACK}" ]]; then
@@ -220,13 +266,13 @@ on_error() {
 }
 trap on_error ERR
 # Arrêt du service, Ctrl+C, fermeture du terminal : retour arrière et statut « failed »
-on_signal() {
+on_signal() {  # on_signal NOM CODE
     FAIL_MESSAGE="Mise à jour interrompue (signal $1 reçu). Consultez le journal${DB_DUMP:+ ; sauvegarde de la base : ${DB_DUMP}}."
-    false || on_error
+    on_error "$2"
 }
-trap 'on_signal TERM' TERM
-trap 'on_signal INT' INT
-trap 'on_signal HUP' HUP
+trap 'on_signal TERM 143' TERM
+trap 'on_signal INT 130' INT
+trap 'on_signal HUP 129' HUP
 
 write_status running "Mise à jour en cours…"
 echo "Mise à jour GeoNature – action '${ACTION}' ${TARGET_LABEL} – $(date)"
@@ -307,6 +353,7 @@ backup_db() {
     if [[ "${DRY_RUN}" == 0 ]]; then
         # Mot de passe dans un fichier .pgpass temporaire (0600), jamais en argument (visible par ps)
         passfile="$(umask 077; mktemp)"
+        PGPASS_TMP="${passfile}"  # supprimé aussi par le piège EXIT
         python3 - "${passfile}" <<'PY'
 import sys
 from urllib.parse import urlparse, unquote
@@ -322,6 +369,7 @@ PY
         (umask 077; PGPASSFILE="${passfile}" pg_dump -Fc -h "${DB_HOST}" -p "${DB_PORT}" \
             -U "${DB_USER}" -f "${dump}" "${DB_NAME}") || rc=$?
         rm -f "${passfile}"
+        PGPASS_TMP=""
         if [[ ${rc} != 0 ]]; then
             FAIL_MESSAGE="Échec de la sauvegarde de la base (pg_dump), mise à jour annulée."
             return "${rc}"
@@ -331,14 +379,29 @@ PY
     echo "Sauvegarde : ${dump}"
     # Ne garder que les BACKUP_KEEP sauvegardes les plus récentes
     if [[ "${DRY_RUN}" == 0 && "${BACKUP_KEEP}" -gt 0 ]]; then
-        find "${STATE_DIR}/backups" -maxdepth 1 -name 'geonature-*.dump' -printf '%T@ %p\n' \
-            | sort -rn | tail -n +"$((BACKUP_KEEP + 1))" | cut -d' ' -f2- | xargs -r rm -f --
+        find "${STATE_DIR}/backups" -maxdepth 1 -name 'geonature-*.dump' -printf '%T@ %p\0' \
+            | sort -rzn | tail -zn +"$((BACKUP_KEEP + 1))" | cut -zd' ' -f2- | xargs -0r rm -f --
     fi
+}
+
+health_check() {  # GeoNature répond-il après redémarrage ? (route /healthz du cœur)
+    if [[ "${DRY_RUN}" == 1 ]]; then echo "+ curl http://127.0.0.1:${GUNICORN_PORT:-8000}/healthz"; return 0; fi
+    step "Vérification que GeoNature répond"
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS --max-time 5 "http://127.0.0.1:${GUNICORN_PORT:-8000}/healthz" >/dev/null 2>&1; then
+            echo "GeoNature répond."
+            return 0
+        fi
+        sleep 3
+    done
+    FAIL_MESSAGE="Après la mise à jour, GeoNature ne répond pas (/healthz)."
+    return 1
 }
 
 run_migration() {  # run_migration DOSSIER_GEONATURE ANCIEN_DOSSIER VERSION_ATTENDUE
     local dir="$1" old="$2" expected="$3" out
-    out="$(mktemp)"
+    tmp_path out
     if [[ "${DRY_RUN}" == 1 ]]; then
         echo "+ GN_MIGRATION_NONINTERACTIVE=1 ${dir}/install/migration/migration.sh ${old} < (yes y)"
         rm -f "${out}"
@@ -354,6 +417,12 @@ run_migration() {  # run_migration DOSSIER_GEONATURE ANCIEN_DOSSIER VERSION_ATTE
         FAIL_MESSAGE="La migration ne s'est pas terminée (ligne « Migration terminée » absente). Consultez le journal."
         return 1
     fi
+    # Erreurs ignorées par migration.sh (installation npm, exception Python…)
+    if grep -qE "npm ERR!|Traceback \(most recent call last\)" "${out}"; then
+        rm -f "${out}"
+        FAIL_MESSAGE="La migration a rencontré des erreurs (npm ou Python) malgré « Migration terminée ». Consultez le journal."
+        return 1
+    fi
     rm -f "${out}"
     if [[ "$(cat "${dir}/VERSION")" != "${expected}" ]]; then
         FAIL_MESSAGE="Après migration, la version installée n'est pas ${expected}."
@@ -363,7 +432,7 @@ run_migration() {  # run_migration DOSSIER_GEONATURE ANCIEN_DOSSIER VERSION_ATTE
 
 download_archive() {  # download_archive REPO TAG DEST_DIR
     local repo="$1" tag="$2" dest="$3" tmp
-    tmp="$(mktemp -d)"
+    tmp_path tmp -d
     run curl -fsSL --retry 3 -o "${tmp}/archive.tar.gz" \
         "https://github.com/${repo}/archive/refs/tags/${tag}.tar.gz"
     run mkdir -p "${dest}"
@@ -379,7 +448,7 @@ do_core() {
     newdir="${parent}/geonature_new_${version}_${TS}"
     olddir="${parent}/geonature_old_${current}_${TS}"
 
-    if ! sudo -n true 2>/dev/null; then
+    if [[ "${DRY_RUN}" == 0 ]] && ! sudo -n true 2>/dev/null; then
         FAIL_MESSAGE="La mise à jour de GeoNature demande un sudo sans mot de passe pour l'utilisateur $(id -un) (le script de migration modifie /etc). Voir la documentation."
         false
     fi
@@ -428,6 +497,7 @@ do_core() {
 
     step "Migration (install/migration/migration.sh)"
     run_migration "${BASE_DIR}" "${olddir}" "${version}"
+    health_check
     ROLLBACK=""
     echo "Ancienne version conservée dans ${olddir} (à supprimer quand tout fonctionne)."
 }
@@ -469,6 +539,7 @@ do_core_git() {  # installation de GeoNature faite avec git : mise à jour sur p
 
     step "Migration (install/migration/migration.sh .)"
     run_migration "${BASE_DIR}" "${BASE_DIR}" "${version}"
+    health_check
     ROLLBACK=""
 }
 
@@ -573,8 +644,9 @@ do_module() {
     step "Configuration et rebuild du frontend"
     run geonature update-configuration
     deactivate
-    ROLLBACK=""
     start_services
+    health_check
+    ROLLBACK=""
     if [[ -n "${olddir}" ]]; then
         echo "Ancienne version du module conservée dans ${olddir}."
     fi
@@ -624,7 +696,7 @@ do_taxref() {
     workdir="${STATE_DIR}/taxref/v${version}"
     marker="${STATE_DIR}/taxref/analysis-v${version}.json"
     mkdir -p "${workdir}"
-    out="$(mktemp)"
+    tmp_path out
     activate_venv
     # TaxHub écrit ses rapports CSV dans ./tmp/ : on travaille dans un dossier dédié.
     cd "${workdir}"

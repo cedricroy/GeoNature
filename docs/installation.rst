@@ -390,8 +390,12 @@ script se déroule ainsi :
   en ``geonature_old_<version>_<date>``, puis lancement de ``migration.sh`` ;
 * installation faite avec git : ``git fetch``, ``git checkout <tag>``, ``git submodule update`` puis
   ``migration.sh .`` ;
-* la migration n'est considérée comme réussie que si ``migration.sh`` affiche « Migration terminée » et que
-  ``VERSION`` vaut la version cible (``migration.sh`` ne s'arrête pas toujours sur une erreur) ;
+* la migration n'est considérée comme réussie que si ``migration.sh`` affiche « Migration terminée », sans
+  erreur ``npm ERR!`` ni exception Python dans sa sortie, que ``VERSION`` vaut la version cible, et que
+  GeoNature répond ensuite sur ``/healthz`` (``migration.sh`` ne s'arrête pas toujours sur une erreur) ;
+* si le service est arrêté pendant la mise à jour (``systemctl stop``, redémarrage du serveur), le script
+  fait son retour arrière (jusqu'à 20 minutes, ``TimeoutStopSec``) et la page affiche l'échec. Si le script est
+  tué brutalement, la page détecte qu'il ne tourne plus et affiche « interrompu » ;
 * en cas d'échec ou d'interruption, l'ancienne version des fichiers est restaurée et les services sont
   redémarrés. **La base de données n'est pas restaurée automatiquement.** Si elle a déjà été migrée,
   restaurez la sauvegarde indiquée dans le journal. ``pg_restore --clean`` ne suffit pas, car il laisse les

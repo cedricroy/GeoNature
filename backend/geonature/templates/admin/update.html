@@ -12,7 +12,6 @@
 {% endmacro %}
 
 {% block body %}
-{% set busy = status.state in ('queued', 'running') %}
 
 {% if not can_update %}
 <div class="alert alert-warning">

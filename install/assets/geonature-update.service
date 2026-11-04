@@ -13,6 +13,9 @@ EnvironmentFile=-${BASE_DIR}/environ
 # Si vous modifiez UPDATER.STATE_DIR dans geonature_config.toml, adaptez ce chemin.
 ExecStart=${BASE_DIR}/install/update/geonature-update.sh --from-request /var/lib/geonature/update/request.env
 TimeoutStartSec=infinity
+# Laisse le temps au retour arrière (réinstallation du backend, build du frontend)
+# quand le service est arrêté pendant une mise à jour.
+TimeoutStopSec=20min
 # La mise à jour arrête geonature et geonature-worker : elle ne doit pas
 # appartenir à leur cgroup, d'où ce service séparé. À l'arrêt du service, toutes
 # ses commandes reçoivent SIGTERM ; le script écrit alors l'état « failed ».
