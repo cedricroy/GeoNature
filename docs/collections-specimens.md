@@ -78,10 +78,21 @@ Deux modèles existent dans GeoNature :
 | Modèle | Exemples | Avantages | Inconvénients |
 |---|---|---|---|
 | **UUID générique** : `uuid_attached_row` + `id_table_location` | `gn_commons.t_medias`, `gn_commons.t_history_actions` (`backend/geonature/core/gn_commons/models/base.py`) | marche pour toutes les sources, aucune modification des modules existants | pas de clé étrangère, donc pas d'intégrité garantie par la base |
-| **UUID → Synthèse avec clé étrangère** | `gn_commons.t_validations` : `uuid_attached_row` est une clé étrangère vers `synthese.unique_id_sinp` (pas d'`id_table_location`) | intégrité garantie, rattachement à la donnée « consolidée » | le spécimen ne peut être rattaché qu'à une donnée déjà dans la Synthèse |
-| **Colonne directe** | `id_individual` dans le dénombrement et la Synthèse (GeoNature amont, module Individuals) | jointure simple, affichable dans la Synthèse | modifie Occtax et la Synthèse, à négocier en amont |
+| **UUID → Synthèse avec clé étrangère** (retenu) | `gn_commons.t_validations` : `uuid_attached_row` est une clé étrangère vers `synthese.unique_id_sinp` (pas d'`id_table_location`) | intégrité garantie, rattachement à la donnée « consolidée » | le spécimen ne peut être rattaché qu'à une donnée déjà dans la Synthèse |
+| **Colonne directe** (écartée) | `id_individual` dans le dénombrement et la Synthèse (GeoNature amont, module Individuals) | jointure simple, affichable dans la Synthèse | modifie Occtax et la Synthèse, à négocier en amont |
 
-**Recommandation** : rattacher à `synthese.unique_id_sinp` (comme `t_validations`), en gardant le champ vide tant que le spécimen n'est pas encore relié à une observation. On peut ensuite proposer à PnX-SI une colonne directe, sur le modèle de `id_individual`, si l'affichage des spécimens dans la Synthèse devient nécessaire.
+**Décision (2026-11-05) : rattachement par UUID, sans toucher au cœur.** On suit le modèle de `t_validations` : `t_specimens.uuid_attached_row` est une clé étrangère vers `gn_synthese.synthese.unique_id_sinp`. La colonne directe façon `id_individual` est **écartée**, car elle modifierait Occtax et la Synthèse.
+
+#### Conséquences de ce choix
+
+- **Rien ne change dans le cœur** : la clé étrangère est déclarée dans une table du module. Aucune table du cœur, d'Occtax ou de Monitoring n'est modifiée.
+- **`uuid_attached_row` peut être vide** : spécimen pas encore rattaché, herbier « en attente », nom absent de Taxref.
+- **Suppression de l'observation** : si l'observation est supprimée dans le module source, sa ligne de Synthèse disparaît. La clé étrangère est donc en `ON DELETE SET NULL`, pour ne jamais perdre un spécimen. Le spécimen passe au statut « observation supprimée » et réapparaît dans la liste de travail.
+- **Un spécimen pointe vers une seule donnée**, puisque `unique_id_sinp` est unique dans la Synthèse. Plusieurs spécimens peuvent pointer vers le même dénombrement.
+- **Monitoring** : le rattachement ne marche que si la vue Synthèse du protocole reprend `uuid_observation` en `unique_id_sinp`.
+- **GeoMys** : l'UUID du dénombrement généré par l'appli (`unique_id_sinp_occtax`) est exactement la clé de rattachement. C'est pour ça que la phase 1 est indispensable.
+- **Limite assumée** : la Synthèse (liste, fiche, exports) **n'affiche pas les spécimens**. On les consulte dans le module Collections, qui affiche l'observation liée. Côté Synthèse, la seule trace de la collecte reste `PREUVE_EXIST` = Oui + `sample_number_proof` / `non_digital_proof`.
+- **Liste de travail** : c'est une requête du module sur la Synthèse, qui retient les observations « spécimen collecté » sans aucun `t_specimens` rattaché à leur `unique_id_sinp`. Elle s'inspire de `routes/observations.py` d'Individuals (`SyntheseQuery`, permissions, floutage).
 
 ### Comment un spécimen entre dans le module
 
@@ -109,6 +120,7 @@ Le module n'écrit jamais lui-même dans la Synthèse, pour garder une seule sou
 ### Synchronisation des déterminations
 
 - La **détermination retenue** du spécimen est la seule qui met à jour l'observation source : `cd_nom`, `nom_cite`, `determiner` de l'occurrence Occtax. Les autres révisions restent dans l'historique du module.
+- Cette mise à jour passe toujours par **l'API du module source** (Occtax `COLLECTIONS`). Le module n'écrit jamais directement dans la Synthèse ni dans les tables d'Occtax : c'est le déclencheur Occtax qui met la Synthèse à jour.
 - Le module fait cette mise à jour seulement s'il en a le droit sur la source, c'est-à-dire sur l'Occtax `COLLECTIONS`. Pour une observation d'un autre module, il **propose** la correction au propriétaire de la donnée, sur le modèle de la validation.
 - **N spécimens d'un même dénombrement avec des déterminations différentes** : on découpe. Un nouveau dénombrement ou une nouvelle occurrence est créé pour chaque taxon, avec son propre UUID, et chaque spécimen est rattaché au bon dénombrement.
 - **Rattachement au rang supérieur** (genre) : la Synthèse affichera le genre. La sensibilité, les filtres et la validation se feront aussi au niveau du genre. Il faut le dire aux utilisateurs.
@@ -235,7 +247,8 @@ Le volet « saisie depuis les étiquettes » de l'issue concerne surtout le trav
    - case « spécimen collecté » (`PREUVE_EXIST` = Oui + `sample_number_proof`) ;
    - solution d'attente par l'export Occtax pour les données saisies en web.
 2. **Phase 2, module `gn_module_collections`** (même structure technique que `gn_module_individuals` : blueprint Flask, branche Alembic, frontend Angular) :
-   - spécimens, déterminations, rattachement à la Synthèse, liste de travail ;
+   - spécimens, déterminations, liste de travail ;
+   - rattachement par UUID (clé étrangère vers `synthese.unique_id_sinp`, `ON DELETE SET NULL`) ;
    - saisie web, saisie en masse et file de transcription ;
    - Occtax dupliqué `COLLECTIONS` pour créer les observations ;
    - étiquettes de détermination et d'herbier ;
@@ -249,7 +262,7 @@ Le module est à proposer et à discuter avec la communauté GeoNature (PnX-SI) 
 
 ## Questions ouvertes
 
-- Rattachement : UUID vers la Synthèse (sans modifier le cœur) ou colonne directe façon `id_individual` (à négocier en amont) ?
+- ~~Rattachement : UUID ou colonne directe ?~~ **Décidé le 2026-11-05** : rattachement par UUID vers la Synthèse, sans modification du cœur.
 - Collections reçues d'autres structures : quel jeu de données, quel producteur, quelle entrée en collection ?
 - Format d'échange exact attendu par e-ReColNat.
 - Faut-il afficher le formulaire `sample_number_proof` dans Occtax web (configuration ou contribution amont) ?
