@@ -90,10 +90,41 @@ Toutes ces observations remontent dans la Synthèse avec leur UUID. Le module pe
 - Permissions : système GeoNature habituel, code module `COLLECTIONS`.
 - Même structure technique que `gn_module_individuals` (Flask blueprint, branche Alembic, frontend Angular).
 
-### Deux façons de faire entrer des spécimens
+### Un module transversal, pas un sous-module Monitoring
 
-- **On part du terrain** (GeoMys, Occtax) : l'observation existe déjà. On coche « spécimen collecté », le spécimen est créé avec l'UUID déjà imprimé sur l'étiquette.
-- **On part d'une collection reçue ou d'un herbier ancien** : il n'y a pas d'observation. On transcrit l'étiquette, on l'interprète, puis le module crée l'observation via l'API Occtax ou le module Import, et y rattache le spécimen. Le module n'écrit pas lui-même dans la Synthèse, pour garder une seule source par donnée.
+La collecte d'un spécimen ne dépend pas du type de saisie : observation opportuniste (Occtax), protocole de suivi (Monitoring), import, herbier ancien. Le module Collections est donc **indépendant**, avec sa propre saisie web. Un sous-module Monitoring a été écarté : il réserverait la collecte aux suivis, imposerait un site, et ne permettrait ni l'historique des déterminations ni les lots mélangés.
+
+**Occtax et Monitoring ne sont pas modifiés.** Le lien passe uniquement par les champs standard (`id_nomenclature_exist_proof`, `non_digital_proof`) et par les UUID.
+
+### Comment un spécimen entre dans le module
+
+1. **Observation opportuniste** (Occtax web ou GeoMys)
+   - On renseigne « Preuve d'existence = non numérique » et le code du spécimen dans `non_digital_proof`.
+   - L'observation apparaît dans la **liste de travail** du module : observations de la Synthèse avec une preuve non numérique et sans fiche spécimen.
+   - Un clic ouvre la fiche spécimen déjà rattachée à l'observation. On complète préparation, rangement et déterminations, puis on imprime l'étiquette.
+2. **Protocole de suivi** (Monitoring web ou GeoMys) : même mécanisme. L'observation remonte dans la Synthèse avec son UUID et apparaît dans la même liste de travail.
+   - À vérifier par protocole : les observations Monitoring n'ont pas de champ « preuve d'existence » standard. Il faut l'ajouter dans la configuration du protocole et le transmettre dans sa vue vers la Synthèse (`id_nomenclature_exist_proof`, `non_digital_proof`).
+3. **Spécimen sans observation** (herbier ancien, collection reçue) : saisie complète dans le module.
+   - Texte de l'étiquette, puis interprétation (lieu, date, nom avec rattachement Taxref), puis validation.
+   - Le module crée ensuite l'observation via l'API Occtax, dans un **jeu de données propre à la collection** (par exemple « Herbier ANA – fonds X »), et s'y rattache. Pour un lot important, on peut passer par le module Import.
+   - Si le nom n'a aucun équivalent dans Taxref, la fiche reste « en attente » dans le module, sans observation.
+4. **Rattachement après coup** : depuis une fiche spécimen, on cherche une observation dans la Synthèse (date, observateur, taxon, lieu) pour la relier. C'est utile si le spécimen a été saisi avant l'observation.
+
+Le module n'écrit pas lui-même dans la Synthèse, pour garder une seule source par donnée.
+
+### Écrans web du module
+
+- **Liste et carte des spécimens**, avec des filtres : collection, statut de traitement, statut Taxref, déterminateur, source (Occtax, Monitoring, Import, saisie directe).
+- **Liste de travail** :
+  - observations avec preuve non numérique mais sans fiche spécimen ;
+  - spécimens « absents de Taxref » ou « à revoir », pour un spécialiste.
+- **Fiche spécimen** :
+  - à gauche, l'étiquette : texte tel qu'écrit et photo (`t_medias`) ;
+  - à droite, l'interprétation : nom exact, recherche Taxref avec synonymes, choix « absent de Taxref », lieu et date normalisés ;
+  - historique des déterminations, avec un bouton « ajouter une révision ».
+- **Saisie en lot** : une station et une récolte, puis plusieurs spécimens à la suite.
+- **Rattachement** à une observation existante (recherche dans la Synthèse).
+- **Export d'étiquettes** (CSV pour le publipostage), par sortie, relevé, jeu de données ou sélection. Plus tard : lecture des photos d'étiquettes côté serveur.
 
 ## Champs à ajouter (inspirés de Darwin Core)
 
